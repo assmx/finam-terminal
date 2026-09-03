@@ -22,6 +22,14 @@ type OrderParams struct {
 	StopPrice  float64 // Required for Stop-Loss and Take-Profit orders
 }
 
+// CashBalance is one currency line of GetAccountResponse.cash — the account's
+// own money, excluding anything borrowed on margin. A negative Amount means the
+// broker is lending in that currency.
+type CashBalance struct {
+	Currency string
+	Amount   float64
+}
+
 // AccountInfo represents account information from Finam API
 type AccountInfo struct {
 	ID            string
@@ -31,6 +39,23 @@ type AccountInfo struct {
 	UnrealizedPnL string
 	OpenDate      time.Time
 	LoadError     string // Non-empty if account failed to load from broker
+
+	// Portfolio composition and margin, from the GetAccountResponse.portfolio
+	// oneof. Which numbers exist depends on the kind, so HasMarginData says
+	// whether they mean anything: MCT is an empty message in the proto and an
+	// absent oneof carries nothing at all, and in both cases a zero here is
+	// "not reported", never "zero roubles".
+	PortfolioKind     string        // "MC", "MCT", "FORTS"; empty when the oneof is absent
+	Cash              []CashBalance // GetAccountResponse.cash, own money by currency
+	AvailableCash     float64       // MC.available_cash or FORTS.available_cash
+	InitialMargin     float64       // MC.initial_margin
+	MaintenanceMargin float64       // MC.maintenance_margin
+	MoneyReserved     float64       // FORTS.money_reserved
+	HasMarginData     bool          // true when the oneof is MC or FORTS
+
+	// Zero time when the broker sends no date.
+	FirstTradeDate    time.Time
+	FirstNonTradeDate time.Time
 }
 
 // Position represents a trading position

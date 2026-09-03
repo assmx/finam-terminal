@@ -16,6 +16,7 @@ import (
 	"google.golang.org/genproto/googleapis/type/date"
 	"google.golang.org/genproto/googleapis/type/decimal"
 	"google.golang.org/genproto/googleapis/type/interval"
+	"google.golang.org/genproto/googleapis/type/money"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
@@ -962,6 +963,11 @@ func (c *Client) GetAccountDetails(accountID string) (*models.AccountInfo, []mod
 		account.UnrealizedPnL = formatDecimal(unrealized)
 	}
 
+	account.Cash = mapCashBalances(accountResp.Cash)
+	applyPortfolio(account, accountResp)
+	account.FirstTradeDate = timestampOrZero(accountResp.FirstTradeDate)
+	account.FirstNonTradeDate = timestampOrZero(accountResp.FirstNonTradeDate)
+
 	var positions []models.Position
 	for _, pos := range accountResp.Positions {
 		ticker := pos.Symbol
@@ -1774,6 +1780,69 @@ func formatValidBefore(vb orders.ValidBefore) string {
 }
 
 // parseDecimalFloat parses a google Decimal to float64, returns 0 on failure
+// mapCashBalances converts GetAccountResponse.cash into models.CashBalance.
+// google.type.Money keeps the fractional part in nanos with the same sign as
+// units, so -300.25 arrives as units=-300, nanos=-250000000 and the two simply
+// add up. A nil entry is dropped rather than turned into a zero balance in an
+// unnamed currency.
+func mapCashBalances(cash []*money.Money) []models.CashBalance {
+	if len(cash) == 0 {
+		return nil
+	}
+
+	balances := make([]models.CashBalance, 0, len(cash))
+	for _, m := range cash {
+		if m == nil {
+			continue
+		}
+		balances = append(balances, models.CashBalance{
+			Currency: m.CurrencyCode,
+			Amount:   float64(m.Units) + float64(m.Nanos)/1e9,
+		})
+	}
+
+	if len(balances) == 0 {
+		return nil
+	}
+	return balances
+}
+
+// applyPortfolio reads the portfolio oneof into the account.
+//
+// HasMarginData is set only for MC and FORTS, the two branches that carry
+// numbers. MCT is an empty message in the proto and an absent oneof carries
+// nothing, so both leave the flag false and let the UI say "Н/Д" instead of
+// presenting a default zero as a real margin figure.
+func applyPortfolio(account *models.AccountInfo, resp *accounts.GetAccountResponse) {
+	switch {
+	case resp.GetPortfolioMc() != nil:
+		mc := resp.GetPortfolioMc()
+		account.PortfolioKind = "MC"
+		account.HasMarginData = true
+		account.AvailableCash = parseDecimalFloat(mc.AvailableCash)
+		account.InitialMargin = parseDecimalFloat(mc.InitialMargin)
+		account.MaintenanceMargin = parseDecimalFloat(mc.MaintenanceMargin)
+	case resp.GetPortfolioForts() != nil:
+		forts := resp.GetPortfolioForts()
+		account.PortfolioKind = "FORTS"
+		account.HasMarginData = true
+		account.AvailableCash = parseDecimalFloat(forts.AvailableCash)
+		account.MoneyReserved = parseDecimalFloat(forts.MoneyReserved)
+	case resp.GetPortfolioMct() != nil:
+		account.PortfolioKind = "MCT"
+	}
+}
+
+// timestampOrZero returns the local time of a protobuf timestamp, or the zero
+// time when the broker omitted it. AsTime() on a nil timestamp answers the Unix
+// epoch, which would read as a real date on screen.
+func timestampOrZero(ts *timestamppb.Timestamp) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime()
+}
+
 func parseDecimalFloat(d *decimal.Decimal) float64 {
 	if d == nil || d.Value == "" {
 		return 0

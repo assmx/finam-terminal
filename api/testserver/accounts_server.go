@@ -6,7 +6,22 @@ import (
 	tradeapiv1 "github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/accounts"
 	"google.golang.org/genproto/googleapis/type/decimal"
+	"google.golang.org/genproto/googleapis/type/money"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// AccountPortfolio carries the optional GetAccountResponse fields that vary by
+// account: the cash list, the portfolio oneof and the first-transaction dates.
+// The oneof branches are held as concrete messages because the interface the
+// generated code uses for them is unexported; GetAccount wraps whichever is set.
+type AccountPortfolio struct {
+	Cash              []*money.Money
+	MC                *accounts.MC
+	FORTS             *accounts.FORTS
+	MCT               *accounts.MCT
+	FirstTradeDate    *timestamppb.Timestamp
+	FirstNonTradeDate *timestamppb.Timestamp
+}
 
 // MockAccountsServer implements accounts.AccountsServiceServer for testing.
 type MockAccountsServer struct {
@@ -17,6 +32,10 @@ type MockAccountsServer struct {
 
 	// TradeHistory keyed by account ID.
 	TradeHistory map[string][]*tradeapiv1.AccountTrade
+
+	// Portfolios keyed by account ID. An account with no entry answers with no
+	// cash and an empty portfolio oneof, which is itself a case worth serving.
+	Portfolios map[string]AccountPortfolio
 
 	// GetAccountError, if set, is returned by GetAccount.
 	GetAccountError error
@@ -31,6 +50,10 @@ func NewMockAccountsServer() *MockAccountsServer {
 		TradeHistory: map[string][]*tradeapiv1.AccountTrade{
 			"ACC001": DefaultTrades("ACC001"),
 		},
+		Portfolios: map[string]AccountPortfolio{
+			"ACC001": DefaultMCPortfolio(),
+			"ACC002": DefaultFORTSPortfolio(),
+		},
 	}
 }
 
@@ -40,12 +63,30 @@ func (m *MockAccountsServer) GetAccount(_ context.Context, req *accounts.GetAcco
 		return nil, m.GetAccountError
 	}
 
-	positions := m.Positions[req.AccountId]
-	return &accounts.GetAccountResponse{
+	resp := &accounts.GetAccountResponse{
 		AccountId: req.AccountId,
 		Equity:    &decimal.Decimal{Value: "500000.00"},
-		Positions: positions,
-	}, nil
+		Positions: m.Positions[req.AccountId],
+	}
+
+	p, ok := m.Portfolios[req.AccountId]
+	if !ok {
+		return resp, nil
+	}
+
+	resp.Cash = p.Cash
+	resp.FirstTradeDate = p.FirstTradeDate
+	resp.FirstNonTradeDate = p.FirstNonTradeDate
+	switch {
+	case p.MC != nil:
+		resp.Portfolio = &accounts.GetAccountResponse_PortfolioMc{PortfolioMc: p.MC}
+	case p.FORTS != nil:
+		resp.Portfolio = &accounts.GetAccountResponse_PortfolioForts{PortfolioForts: p.FORTS}
+	case p.MCT != nil:
+		resp.Portfolio = &accounts.GetAccountResponse_PortfolioMct{PortfolioMct: p.MCT}
+	}
+
+	return resp, nil
 }
 
 // Trades returns trade history.

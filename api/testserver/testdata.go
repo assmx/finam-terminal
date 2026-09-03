@@ -15,6 +15,7 @@ import (
 	"google.golang.org/genproto/googleapis/type/date"
 	"google.golang.org/genproto/googleapis/type/decimal"
 	"google.golang.org/genproto/googleapis/type/interval"
+	"google.golang.org/genproto/googleapis/type/money"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -39,6 +40,39 @@ func DefaultAssets() []*assets.Asset {
 		{Ticker: "LKOH", Symbol: "LKOH@TQBR", Name: "ЛУКОЙЛ", Mic: "TQBR"},
 		{Ticker: "YNDX", Symbol: "YNDX@TQBR", Name: "Яндекс", Mic: "TQBR"},
 		{Ticker: "ROSN", Symbol: "ROSN@TQBR", Name: "Роснефть", Mic: "TQBR"},
+	}
+}
+
+// DefaultMCPortfolio returns a margin (MC) account: cash in two currencies —
+// the second one negative, because a borrowed balance is a normal state the
+// mapping must carry through with its sign — plus the three margin numbers.
+func DefaultMCPortfolio() AccountPortfolio {
+	return AccountPortfolio{
+		Cash: []*money.Money{
+			{CurrencyCode: "RUB", Units: 125000, Nanos: 500000000},
+			{CurrencyCode: "USD", Units: -300, Nanos: -250000000},
+		},
+		MC: &accounts.MC{
+			AvailableCash:     &decimal.Decimal{Value: "120000.50"},
+			InitialMargin:     &decimal.Decimal{Value: "80000"},
+			MaintenanceMargin: &decimal.Decimal{Value: "40000"},
+		},
+		FirstTradeDate:    timestamppb.New(time.Date(2019, 4, 15, 10, 30, 0, 0, time.UTC)),
+		FirstNonTradeDate: timestamppb.New(time.Date(2019, 4, 10, 8, 0, 0, 0, time.UTC)),
+	}
+}
+
+// DefaultFORTSPortfolio returns a derivatives (FORTS) account, where the broker
+// reports money_reserved instead of the MC margin pair.
+func DefaultFORTSPortfolio() AccountPortfolio {
+	return AccountPortfolio{
+		Cash: []*money.Money{
+			{CurrencyCode: "RUB", Units: 75000, Nanos: 0},
+		},
+		FORTS: &accounts.FORTS{
+			AvailableCash: &decimal.Decimal{Value: "75000"},
+			MoneyReserved: &decimal.Decimal{Value: "25000.25"},
+		},
 	}
 }
 
