@@ -8,7 +8,7 @@
   - Acceptance: spec.md дополнен разделом с фактами; таблица соответствия типов и решение по формуле облигаций зафиксированы
 
 ## Phase 2: Модели и API-слой
-- [ ] Task: (Red→Green) `models.CashBalance` и новые поля `AccountInfo` (`PortfolioKind`, `Cash`, `AvailableCash`, `InitialMargin`, `MaintenanceMargin`, `MoneyReserved`, `HasMarginData`, `FirstTradeDate`, `FirstNonTradeDate`) + маппинг oneof `portfolio`, списка `cash` и дат в `GetAccountDetails` (api/client.go); фикстуры testserver: ответ счёта с `cash` и `portfolio_mc`, второй счёт с `portfolio_forts`; юнит-тесты маппинга (MC, FORTS, пустой oneof → `HasMarginData=false`, nil-поля) и интеграционный тест полей через bufconn
+- [x] Task: (Red→Green) `models.CashBalance` и новые поля `AccountInfo` (`PortfolioKind`, `Cash`, `AvailableCash`, `InitialMargin`, `MaintenanceMargin`, `MoneyReserved`, `HasMarginData`, `FirstTradeDate`, `FirstNonTradeDate`) + маппинг oneof `portfolio`, списка `cash` и дат в `GetAccountDetails` (api/client.go); фикстуры testserver: ответ счёта с `cash` и `portfolio_mc`, второй счёт с `portfolio_forts`; юнит-тесты маппинга (MC, FORTS, пустой oneof → `HasMarginData=false`, nil-поля) и интеграционный тест полей через bufconn (15d14b1)
   - Acceptance: тесты зелёные; существующие тесты `GetAccountDetails` не сломаны
 - [ ] Task: (Red→Green) `SecurityInfo.Type` + сохранение `Asset.Type` в `loadAssetCache` (карта тип по полному символу и по тикеру) + `Client.GetInstrumentType(symbol string) string`; фикстуры `DefaultAssets()` получают типы (акция, облигация, фьючерс); тесты: поиск по символу и по тикеру, пустая строка для неизвестного
   - Acceptance: тесты зелёные; кеш активов по-прежнему грузится одним запросом
