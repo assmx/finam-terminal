@@ -13,6 +13,7 @@ import (
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/assets"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/auth"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/metrics"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/orders"
 	"google.golang.org/genproto/googleapis/type/decimal"
 	"google.golang.org/genproto/googleapis/type/interval"
@@ -41,6 +42,16 @@ func (m *mockMarketDataServiceClient) LastQuote(ctx context.Context, in *marketd
 
 func (m *mockMarketDataServiceClient) Bars(ctx context.Context, in *marketdata.BarsRequest, opts ...grpc.CallOption) (*marketdata.BarsResponse, error) {
 	return m.BarsFunc(ctx, in, opts...)
+}
+
+// mockUsageMetricsServiceClient is a manual mock for metrics.UsageMetricsServiceClient
+type mockUsageMetricsServiceClient struct {
+	metrics.UsageMetricsServiceClient
+	GetUsageMetricsFunc func(ctx context.Context, in *metrics.GetUsageMetricsRequest, opts ...grpc.CallOption) (*metrics.GetUsageMetricsResponse, error)
+}
+
+func (m *mockUsageMetricsServiceClient) GetUsageMetrics(ctx context.Context, in *metrics.GetUsageMetricsRequest, opts ...grpc.CallOption) (*metrics.GetUsageMetricsResponse, error) {
+	return m.GetUsageMetricsFunc(ctx, in, opts...)
 }
 
 // mockAssetsServiceClient is a manual mock for assets.AssetsServiceClient

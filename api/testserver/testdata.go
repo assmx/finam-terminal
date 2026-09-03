@@ -11,6 +11,7 @@ import (
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/assets"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/corporateactions"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/metrics"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/orders"
 	"google.golang.org/genproto/googleapis/type/date"
 	"google.golang.org/genproto/googleapis/type/decimal"
@@ -43,6 +44,25 @@ func DefaultAssets() []*assets.Asset {
 		{Ticker: "LKOH", Symbol: "LKOH@TQBR", Name: "ЛУКОЙЛ", Mic: "TQBR", Type: "BONDS"},
 		{Ticker: "YNDX", Symbol: "YNDX@TQBR", Name: "Яндекс", Mic: "TQBR", Type: "FUTURES"},
 		{Ticker: "ROSN", Symbol: "ROSN@TQBR", Name: "Роснефть", Mic: "TQBR"},
+	}
+}
+
+// DefaultQuotas returns three API quotas at different fill levels, shaped like
+// the real answer observed on 2026-09-03: names in Service.methodCamelCase
+// form, a uniform limit of 200 with one small outlier, and — the case that
+// shapes the renderer — no reset_time on a quota nothing has spent this window.
+//
+// The list is deliberately not in remaining-share order, so a test can tell
+// sorting apart from the order the API happened to send.
+func DefaultQuotas() []*metrics.GetUsageMetricsResponse_QuotaUsage {
+	reset := timestamppb.New(time.Date(2026, 9, 3, 17, 11, 21, 0, time.UTC))
+	return []*metrics.GetUsageMetricsResponse_QuotaUsage{
+		// Half spent.
+		{Name: "MarketDataService.lastQuote", Limit: 200, Remaining: 100, ResetTime: reset},
+		// Nearly exhausted.
+		{Name: "AccountsService.getAccount", Limit: 200, Remaining: 12, ResetTime: reset},
+		// Untouched: the API sends no reset_time for these.
+		{Name: "ReportsService.createAccountReport", Limit: 3, Remaining: 3},
 	}
 }
 

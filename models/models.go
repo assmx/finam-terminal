@@ -299,3 +299,17 @@ type IndexConstituent struct {
 	Sector string
 	Weight float64
 }
+
+// QuotaUsage is one row of UsageMetricsService.GetUsageMetrics: how many calls
+// of one API method are left in the current window.
+//
+// Name is the method as the API spells it ("AccountsService.getAccount").
+// ResetAt is the zero time when the API sends no reset_time, which is the
+// normal state for a quota nothing has spent in this window — so a renderer
+// must show a dash there rather than a countdown.
+type QuotaUsage struct {
+	Name      string
+	Limit     int64
+	Remaining int64
+	ResetAt   time.Time
+}

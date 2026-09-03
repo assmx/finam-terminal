@@ -30,6 +30,7 @@ import (
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/auth"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/corporateactions"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/metrics"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/orders"
 )
 
@@ -45,6 +46,7 @@ type Client struct {
 	assetsClient           assets.AssetsServiceClient
 	ordersClient           orders.OrdersServiceClient
 	corporateActionsClient corporateactions.CorporateActionsServiceClient
+	usageMetricsClient     metrics.UsageMetricsServiceClient
 
 	token       string
 	tokenExpiry time.Time
@@ -120,6 +122,7 @@ func newClientFromConn(conn *grpc.ClientConn, apiToken string) (*Client, error) 
 		assetsClient:           assets.NewAssetsServiceClient(conn),
 		ordersClient:           orders.NewOrdersServiceClient(conn),
 		corporateActionsClient: corporateactions.NewCorporateActionsServiceClient(conn),
+		usageMetricsClient:     metrics.NewUsageMetricsServiceClient(conn),
 		apiToken:               apiToken,
 		assetMicCache:          make(map[string]string),
 		assetLotCache:          make(map[string]float64),
@@ -644,6 +647,42 @@ func (c *Client) GetInstrumentName(key string) string {
 	c.assetMutex.RLock()
 	defer c.assetMutex.RUnlock()
 	return c.instrumentNameCache[key]
+}
+
+// GetUsageMetrics returns the Trade API quota table for the session token: one
+// row per method with its limit, remaining calls and reset time.
+//
+// The quotas belong to the token, not to an account, so a single call answers
+// for every account. Nothing here retries or polls — the Analytics tab asks
+// once on entry and again only when the user presses R.
+func (c *Client) GetUsageMetrics() ([]models.QuotaUsage, error) {
+	ctx, cancel := c.getContext()
+	defer cancel()
+
+	resp, err := c.usageMetricsClient.GetUsageMetrics(ctx, &metrics.GetUsageMetricsRequest{})
+	if err != nil {
+		c.logGRPCError("UsageMetricsService", "GetUsageMetrics", err)
+		return nil, fmt.Errorf("failed to get usage metrics: %w", err)
+	}
+
+	quotas := make([]models.QuotaUsage, 0, len(resp.Quotas))
+	for _, q := range resp.Quotas {
+		if q == nil {
+			continue
+		}
+		quotas = append(quotas, models.QuotaUsage{
+			Name:      q.Name,
+			Limit:     q.Limit,
+			Remaining: q.Remaining,
+			// reset_time is absent for any quota untouched in this window,
+			// which is the normal state for most of them. Zero time says
+			// "unknown"; the epoch would render as a countdown of decades.
+			ResetAt: timestampOrZero(q.ResetTime),
+		})
+	}
+
+	log.Printf("[INFO] Loaded %d API quotas", len(quotas))
+	return quotas, nil
 }
 
 // GetInstrumentType returns Asset.Type for a full symbol or a bare ticker, as
