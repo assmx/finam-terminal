@@ -477,3 +477,28 @@ func TestOverviewEntry_LoadsCompositionWithoutSubscribing(t *testing.T) {
 		}
 	}
 }
+
+// TestShareBar covers the clamps. A share is normally 0..1, but the bar is the
+// last thing between a bad number and a row that spills across the column, so
+// it defends itself.
+func TestShareBar(t *testing.T) {
+	tests := []struct {
+		name  string
+		share float64
+		want  string
+	}{
+		{"empty", 0, "░░░░░░░░░░"},
+		{"half", 0.5, "█████░░░░░"},
+		{"full", 1, "██████████"},
+		{"over one is clamped", 1.5, "██████████"},
+		{"negative is clamped", -0.3, "░░░░░░░░░░"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shareBar(tt.share); got != tt.want {
+				t.Errorf("shareBar(%v) = %q, want %q", tt.share, got, tt.want)
+			}
+		})
+	}
+}

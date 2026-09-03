@@ -33,9 +33,6 @@ var analyticsScreens = []struct {
 	{AnalyticsQuotas, "API", "quotas"},
 }
 
-// AnalyticsScreenCount is how many sub-screens the digit keys can reach.
-func AnalyticsScreenCount() int { return len(analyticsScreens) }
-
 // AnalyticsView is the Analytics tab: a sub-screen bar over a Pages stack.
 //
 // Each sub-screen carries its own status line, so a failed quota load cannot

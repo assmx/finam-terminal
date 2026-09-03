@@ -9,11 +9,23 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-// mustReach waits for the quota loader to have been called n times.
-func mustReach(t *testing.T, mock *mockClient, n int64) {
+// mustReach waits for the quota loader to have been called n times and to have
+// finished. Waiting only for the counter is not enough: it is incremented
+// inside the request, while the loader is still marked in flight, and a second
+// R arriving in that window is deliberately dropped rather than stacking a
+// duplicate request.
+func mustReach(t *testing.T, app *App, mock *mockClient, n int64) {
 	t.Helper()
+
 	if !waitFor(func() bool { return mock.GetUsageMetricsCalls.Load() >= n }) {
 		t.Fatalf("GetUsageMetrics called %d times, want %d", mock.GetUsageMetricsCalls.Load(), n)
+	}
+	if !waitFor(func() bool {
+		app.dataMutex.RLock()
+		defer app.dataMutex.RUnlock()
+		return !app.analytics.quotasLoading
+	}) {
+		t.Fatal("the quota load never settled")
 	}
 }
 
@@ -64,10 +76,10 @@ func TestAnalyticsKeys_SwitchingCostsNoRequests(t *testing.T) {
 			return []models.QuotaUsage{{Name: "AccountsService.getAccount", Limit: 200, Remaining: 200}}, nil
 		},
 	}
-	_, capture := analyticsApp(t, mock)
+	app, capture := analyticsApp(t, mock)
 
 	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
-	mustReach(t, mock, 1)
+	mustReach(t, app, mock, 1)
 
 	for range 5 {
 		capture(tcell.NewEventKey(tcell.KeyRune, '1', tcell.ModNone))
@@ -108,18 +120,18 @@ func TestAnalyticsRefresh_ReloadsQuotas(t *testing.T) {
 			return []models.QuotaUsage{{Name: "AccountsService.getAccount", Limit: 200, Remaining: 200}}, nil
 		},
 	}
-	_, capture := analyticsApp(t, mock)
+	app, capture := analyticsApp(t, mock)
 
 	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
-	mustReach(t, mock, 1)
+	mustReach(t, app, mock, 1)
 
 	capture(tcell.NewEventKey(tcell.KeyRune, 'R', tcell.ModNone))
-	mustReach(t, mock, 2)
+	mustReach(t, app, mock, 2)
 
 	// The Cyrillic key in the same physical position works too, so the shortcut
 	// survives a Russian keyboard layout.
 	capture(tcell.NewEventKey(tcell.KeyRune, 'К', tcell.ModNone))
-	mustReach(t, mock, 3)
+	mustReach(t, app, mock, 3)
 }
 
 // TestAnalyticsRefresh_OverviewDoesNotFetchQuotas keeps R on the overview from
@@ -179,7 +191,7 @@ func TestAnalyticsState_QuotaCacheIsSessionWide(t *testing.T) {
 	app.portfolioView.TabbedView.Analytics.SetScreen(AnalyticsQuotas)
 
 	app.ensureQuotasLoaded()
-	mustReach(t, mock, 1)
+	mustReach(t, app, mock, 1)
 
 	app.dataMutex.Lock()
 	app.selectedIdx = 1
