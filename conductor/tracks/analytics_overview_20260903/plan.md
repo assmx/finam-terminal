@@ -22,7 +22,7 @@
   - Acceptance: тесты зелёные; функции не паникуют на пустом входе и не возвращают NaN/Inf
 - [x] Task: (Red→Green) `analytics/risk.go`: `RiskMetrics(RiskInput) Risk` — MC (использование, запас, плечо), FORTS (использование ГО, плечо «Н/Д»), MCT/пустой oneof («Н/Д»), нулевое эквити → «Н/Д»; уровни цвета по порогам 50/80 и 50/20; табличные тесты границ порогов и всех видов портфеля (e5c0b2b)
   - Acceptance: тесты зелёные
-- [~] Task: (Red→Green) `analytics/quotas.go`: `SortQuotas` (по доле остатка, `Limit=0` в конец) и `QuotaLevel` (пороги 20/50); тесты сортировки и уровней
+- [x] Task: (Red→Green) `analytics/quotas.go`: `SortQuotas` (по доле остатка, `Limit=0` в конец) и `QuotaLevel` (пороги 20/50); тесты сортировки и уровней (256f74b)
   - Acceptance: тесты зелёные; покрытие пакета ≥ 80%
 
 ## Phase 4: UI — вкладка, Обзор, API
