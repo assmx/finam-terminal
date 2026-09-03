@@ -34,11 +34,14 @@ func MakeJWT(expiry time.Time) string {
 
 // DefaultAssets returns a set of realistic instruments for testing.
 func DefaultAssets() []*assets.Asset {
+	// Types are the values the real bulk list uses (confirmed 2026-09-03 over
+	// the whole catalogue). ROSN deliberately carries none, so "the API sent
+	// no type" stays covered alongside the populated cases.
 	return []*assets.Asset{
-		{Ticker: "SBER", Symbol: "SBER@TQBR", Name: "Сбер Банк", Mic: "TQBR"},
-		{Ticker: "GAZP", Symbol: "GAZP@TQBR", Name: "Газпром", Mic: "TQBR"},
-		{Ticker: "LKOH", Symbol: "LKOH@TQBR", Name: "ЛУКОЙЛ", Mic: "TQBR"},
-		{Ticker: "YNDX", Symbol: "YNDX@TQBR", Name: "Яндекс", Mic: "TQBR"},
+		{Ticker: "SBER", Symbol: "SBER@TQBR", Name: "Сбер Банк", Mic: "TQBR", Type: "EQUITIES"},
+		{Ticker: "GAZP", Symbol: "GAZP@TQBR", Name: "Газпром", Mic: "TQBR", Type: "EQUITIES"},
+		{Ticker: "LKOH", Symbol: "LKOH@TQBR", Name: "ЛУКОЙЛ", Mic: "TQBR", Type: "BONDS"},
+		{Ticker: "YNDX", Symbol: "YNDX@TQBR", Name: "Яндекс", Mic: "TQBR", Type: "FUTURES"},
 		{Ticker: "ROSN", Symbol: "ROSN@TQBR", Name: "Роснефть", Mic: "TQBR"},
 	}
 }

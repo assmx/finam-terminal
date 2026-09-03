@@ -121,6 +121,10 @@ type SecurityInfo struct {
 	Name     string
 	Lot      float64
 	Currency string
+	// Type is Asset.Type verbatim, as the bulk asset list reports it
+	// (EQUITIES, BONDS, FUNDS, FUTURES, OPTIONS, CURRENCIES, INDICES,
+	// SPREADS, SWAPS, OTHER). Empty when the API sent none.
+	Type string
 }
 
 // Trade represents a trade in history

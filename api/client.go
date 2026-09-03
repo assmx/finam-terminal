@@ -58,6 +58,7 @@ type Client struct {
 	assetMicCache       map[string]string  // ticker -> symbol@mic
 	assetLotCache       map[string]float64 // ticker -> lot size (GetAsset.lot_size)
 	tradeLotCache       map[string]float64 // ticker -> trade lot size (GetAssetParams.trade_lot_size); 0 = checked, API has none
+	assetTypeCache      map[string]string  // ticker or symbol -> Asset.Type, from the bulk list
 	instrumentNameCache map[string]string  // ticker or symbol -> human-readable name
 	securityCache       []models.SecurityInfo
 	assetMutex          sync.RWMutex
@@ -123,6 +124,7 @@ func newClientFromConn(conn *grpc.ClientConn, apiToken string) (*Client, error) 
 		assetMicCache:          make(map[string]string),
 		assetLotCache:          make(map[string]float64),
 		tradeLotCache:          make(map[string]float64),
+		assetTypeCache:         make(map[string]string),
 		indexCache:             make(map[string]indexCacheEntry),
 		instrumentNameCache:    make(map[string]string),
 		securityCache:          make([]models.SecurityInfo, 0),
@@ -352,10 +354,23 @@ func (c *Client) loadAssetCache() error {
 			}
 		}
 
+		// The instrument type rides along on the bulk list the terminal
+		// already loads at startup, so the Analytics overview groups
+		// positions without a single extra request.
+		if asset.Type != "" {
+			if asset.Ticker != "" {
+				c.assetTypeCache[asset.Ticker] = asset.Type
+			}
+			if fullSymbol != "" {
+				c.assetTypeCache[fullSymbol] = asset.Type
+			}
+		}
+
 		c.securityCache = append(c.securityCache, models.SecurityInfo{
 			Ticker: asset.Ticker,
 			Symbol: fullSymbol,
 			Name:   asset.Name,
+			Type:   asset.Type,
 		})
 	}
 
@@ -629,6 +644,32 @@ func (c *Client) GetInstrumentName(key string) string {
 	c.assetMutex.RLock()
 	defer c.assetMutex.RUnlock()
 	return c.instrumentNameCache[key]
+}
+
+// GetInstrumentType returns Asset.Type for a full symbol or a bare ticker, as
+// the bulk asset list reported it. An instrument outside the list and one whose
+// type the API left blank both answer "", which the caller groups as Прочее —
+// the distinction would not change anything on screen.
+//
+// This is a pure cache read: it never issues a request, which is what lets the
+// Analytics overview redraw on every five-second tick for free.
+func (c *Client) GetInstrumentType(symbol string) string {
+	if symbol == "" {
+		return ""
+	}
+
+	c.assetMutex.RLock()
+	defer c.assetMutex.RUnlock()
+
+	if t, ok := c.assetTypeCache[symbol]; ok {
+		return t
+	}
+	// A caller holding "SBER@MISX" when the list only keyed "SBER" (or the
+	// other way round) still gets an answer.
+	if ticker, _, found := strings.Cut(symbol, "@"); found {
+		return c.assetTypeCache[ticker]
+	}
+	return ""
 }
 
 // UpdateInstrumentCache stores a human-readable name keyed by both ticker and full symbol.
