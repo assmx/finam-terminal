@@ -14,7 +14,7 @@
   - Acceptance: тесты зелёные; кеш активов по-прежнему грузится одним запросом
 - [x] Task: (Red→Green) `models.QuotaUsage` + `Client.GetUsageMetrics()` (`usageMetricsClient` в `newClientFromConn`, `logGRPCError`, nil-safe `reset_time`) + `MockUsageMetricsServer` в api/testserver (седьмой сервис: фикстура `DefaultQuotas()` с тремя квотами разной заполненности, `GetUsageMetricsError` для инъекции, счётчик вызовов); юнит-тест маппинга и интеграционные тесты (успех, ошибка, пустой список) (9e1d573)
   - Acceptance: тесты зелёные; `TestServer` регистрирует семь сервисов
-- [~] Task: `ui.APIClient` + мок-клиент ui-тестов: `GetUsageMetrics`, `GetInstrumentType` (счётчики вызовов в моке для критериев «0 запросов на тике»)
+- [x] Task: `ui.APIClient` + мок-клиент ui-тестов: `GetUsageMetrics`, `GetInstrumentType` (счётчики вызовов в моке для критериев «0 запросов на тике») (05e6ef8)
   - Acceptance: `go build ./... && go vet ./...` чистые; существующие ui-тесты зелёные
 
 ## Phase 3: Пакет analytics — структура, риск, квоты
