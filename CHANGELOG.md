@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Analytics tab**: a fifth tab with sub-screens switched by digit keys (`[1] Обзор  [2] API`). The overview breaks the portfolio down by instrument type and by sector with shares and bars, shows the cash line, a margin and risk block (margin utilisation, cushion to a margin call, leverage) and the top-3 concentration. It is computed entirely from data the terminal already holds and **issues no request of its own**, so it redraws on every five-second tick for free (`analytics_overview`).
+- **`UsageMetricsService.GetUsageMetrics`**: `Client.GetUsageMetrics` maps the Trade API quota table into `models.QuotaUsage`. The API sub-screen shows limit, remaining, a reset countdown and usage per method, sorted by how close each quota is to running out — the API's own order is arbitrary and differs between calls. Fetched once on entry and on `R`, never on a timer (`analytics_overview`).
+- **New `analytics/` package**: pure calculations over `models` with no I/O and no tview — `Structure` (allocation, sectors, concentration), `RiskMetrics` (margin figures and colour levels), `SortQuotas`/`QuotaLevel`/`FormatReset`, and the number helpers behind them. Nothing panics on empty or malformed broker data and no result is ever NaN or Inf: an uncomputable value is reported through a `Valid` flag so the screen shows `Н/Д`. Coverage 95.5% (`analytics_overview`).
+- **New `GetAccount` fields**: `AccountInfo` now carries the cash list by currency (`models.CashBalance`), the portfolio kind and its margin numbers (`initial_margin`, `maintenance_margin`, `available_cash`, `money_reserved`) and the first-transaction dates. All of it arrived in the same response the terminal already made every five seconds and was being discarded, so the whole margin block costs nothing (`analytics_overview`).
+- **`Asset.Type` in the instrument cache**: `Client.GetInstrumentType` resolves an instrument's type by full symbol or bare ticker from the bulk list loaded once at startup. A pure memory read — it never issues a request (`analytics_overview`).
+- **Mock server**: `MockUsageMetricsServer` is the seventh registered service, with a quota fixture and error injection; `MockAccountsServer` serves per-account cash and portfolio oneof fixtures (MC and FORTS) (`analytics_overview`).
+- **User manual**: new page [«Вкладка Analytics»](docs/user_manual/analytics.md) (`analytics_overview`).
+
+### Changed
+- **Position value is computed in one place**: `analytics.PositionValue` now backs both the Positions tab's Value column and the Analytics overview, so the two screens cannot disagree about what a holding is worth. As a result that column falls back to the broker's own `current_price` when the live quote has not arrived, instead of showing `N/A` (`analytics_overview`).
+- **`applyAccountData`** carries the whole refreshed account — margin, cash and dates — onto the stored account, not just equity and unrealized P&L. Without it the Analytics margin block would have shown the values from the first load forever (`analytics_overview`).
+- **Tab navigation**: `activeTabTable` returns a `tview.Primitive` rather than a `*tview.Table`, because the Analytics tab is not a table and decides for itself which primitive takes focus on the current sub-screen (`analytics_overview`).
+
+### Reconnaissance (real API, 2026-09-03)
+- **`Asset.Type`**: the full catalogue (291 890 instruments over 98 pages) uses ten values, four of them unplanned — `INDICES`, `SPREADS`, `SWAPS` and `OTHER`. `OTHER` is the largest bucket at 41%, so the Прочее row is a normal sight rather than a symptom. The six expected values keep their groups and everything else falls through to Прочее.
+- **`GetUsageMetrics`**: 39 quotas, `limit` 200 for all but `ReportsService.createAccountReport` (3), a 60-second window, and — the fact that shaped the renderer — `reset_time` is absent for any quota untouched in the current window, which was 37 of the 39.
+- **Not confirmed**: no available token carries a trading account (`TokenDetails.account_ids` is empty), so the `GetAccount` field census and the bond `current_price` format could not be observed. The mapping is written nil-safe per field, the bond face-value multiplier stays disabled, and the gap is covered by the track's manual smoke test.
+
 ## [v0.16.0] - 2026-08-27
 
 ### Added
