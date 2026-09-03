@@ -81,6 +81,8 @@ func setupInputHandlers(app *App) {
 			app.app.SetFocus(app.portfolioView.TabbedView.OrdersTable)
 		case TabIndex:
 			app.app.SetFocus(app.portfolioView.TabbedView.IndexTable)
+		case TabAnalytics:
+			app.app.SetFocus(app.portfolioView.TabbedView.Analytics.Focusable())
 		}
 
 		// Same reason as in refresh: the Index tab has no account to wait for.

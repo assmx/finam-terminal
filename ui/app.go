@@ -962,8 +962,14 @@ func (a *App) CloseProfile() {
 	a.app.SetFocus(a.activeTabTable())
 }
 
-// activeTabTable returns the table of the tab currently on screen.
-func (a *App) activeTabTable() *tview.Table {
+// activeTabTable returns the primitive that should hold focus for the tab
+// currently on screen. It is what a closing profile or modal hands focus back
+// to, so leaving one lands on the tab it was opened from.
+//
+// It returns a Primitive rather than a Table because the Analytics tab is not
+// a table: which primitive is focusable there depends on its sub-screen, and
+// the tab answers that question itself.
+func (a *App) activeTabTable() tview.Primitive {
 	tv := a.portfolioView.TabbedView
 	switch tv.ActiveTab {
 	case TabHistory:
@@ -972,6 +978,8 @@ func (a *App) activeTabTable() *tview.Table {
 		return tv.OrdersTable
 	case TabIndex:
 		return tv.IndexTable
+	case TabAnalytics:
+		return tv.Analytics.Focusable()
 	default:
 		return tv.PositionsTable
 	}
