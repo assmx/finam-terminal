@@ -169,9 +169,3 @@ func createQuotaTable() *tview.Table {
 	table.SetFixed(1, 0)
 	return table
 }
-
-// updateQuotaTable redraws the API quota table from the cached answer.
-func updateQuotaTable(_ *App) {}
-
-// updateQuotaStatus redraws the API sub-screen's status line.
-func updateQuotaStatus(_ *App) {}
