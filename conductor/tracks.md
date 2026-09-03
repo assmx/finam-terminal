@@ -190,3 +190,15 @@ This file tracks all major tracks for the project. Each track has its own detail
 *Spec: [./tracks/analytics_overview_20260903/spec.md](./tracks/analytics_overview_20260903/spec.md)*
 *Plan: [./tracks/analytics_overview_20260903/plan.md](./tracks/analytics_overview_20260903/plan.md)*
 *Phases: 5 | Tasks: 15*
+
+
+---
+
+
+- [ ] **Track: Analytics — история сделок, деньги, выплаты, бенчмарк IMOEX**
+
+*Link: [./tracks/analytics_history_20260903/](./tracks/analytics_history_20260903/)*
+*Spec: [./tracks/analytics_history_20260903/spec.md](./tracks/analytics_history_20260903/spec.md)*
+*Plan: [./tracks/analytics_history_20260903/plan.md](./tracks/analytics_history_20260903/plan.md)*
+*Phases: 7 | Tasks: 21*
+*Depends on: analytics_overview_20260903*
