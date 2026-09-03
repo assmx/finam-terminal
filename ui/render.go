@@ -121,13 +121,15 @@ func updatePositionsTable(app *App) {
 		quote := q[p.Symbol]
 		rowNum := row + 1
 
-		qty, _ := parseFloat(p.Quantity)
 		displayQty := displayLots(p.Quantity, p.LotSize)
 
+		// The same helper the Analytics overview uses, so the two screens
+		// cannot disagree about what a holding is worth. It also falls back to
+		// the broker's own price, which fills this column in for a position
+		// whose quote has not arrived yet instead of leaving it "N/A".
 		totalValue := "N/A"
-		if quote != nil && quote.Last != "N/A" {
-			lastPrice, _ := parseFloat(quote.Last)
-			totalValue = fmt.Sprintf("%.2f", qty*lastPrice)
+		if value, ok := positionValue(p, quote); ok {
+			totalValue = fmt.Sprintf("%.2f", value)
 		}
 
 		dailyPnL := p.DailyPnL

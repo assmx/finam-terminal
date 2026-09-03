@@ -99,6 +99,11 @@ func (a *App) flushQuoteInbox() {
 		updateIndexTable(a)
 	}
 
+	// Live quotes move the portfolio's value, so the breakdown follows them.
+	if a.onAnalyticsTab() {
+		updateAnalyticsOverview(a)
+	}
+
 	if accountID == "" {
 		return
 	}

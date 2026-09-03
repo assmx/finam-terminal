@@ -51,6 +51,10 @@ type mockClient struct {
 	GetInstrumentTypeCalls atomic.Int64
 	GetUsageMetricsFunc    func() ([]models.QuotaUsage, error)
 	GetUsageMetricsCalls   atomic.Int64
+
+	// GetQuotesCalls backs the same budget assertions: a redraw of the
+	// Analytics overview must not reach for quotes either.
+	GetQuotesCalls atomic.Int64
 }
 
 func (m *mockClient) GetAccounts() ([]models.AccountInfo, error) {
@@ -68,6 +72,7 @@ func (m *mockClient) GetAccountDetails(accountID string) (*models.AccountInfo, [
 }
 
 func (m *mockClient) GetQuotes(accountID string, symbols []string) (map[string]*models.Quote, error) {
+	m.GetQuotesCalls.Add(1)
 	if m.GetQuotesFunc != nil {
 		return m.GetQuotesFunc(accountID, symbols)
 	}

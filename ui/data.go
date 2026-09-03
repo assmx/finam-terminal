@@ -84,12 +84,24 @@ func (a *App) applyAccountData(accountID string, pos []models.Position, quotes m
 		// map holds the quotes the stream delivered.
 		a.quotes[accountID] = make(map[string]*models.Quote)
 	}
-	// Update account info (Equity, UnrealizedPnL) with fresh data from API
+	// Refresh the account's own numbers from the API. The margin block and the
+	// cash line of the Analytics overview read them straight off this struct,
+	// so carrying only equity here would leave that screen showing the values
+	// from the first load forever.
 	if accInfo != nil {
 		for i := range a.accounts {
 			if a.accounts[i].ID == accountID {
 				a.accounts[i].Equity = accInfo.Equity
 				a.accounts[i].UnrealizedPnL = accInfo.UnrealizedPnL
+				a.accounts[i].PortfolioKind = accInfo.PortfolioKind
+				a.accounts[i].HasMarginData = accInfo.HasMarginData
+				a.accounts[i].Cash = accInfo.Cash
+				a.accounts[i].AvailableCash = accInfo.AvailableCash
+				a.accounts[i].InitialMargin = accInfo.InitialMargin
+				a.accounts[i].MaintenanceMargin = accInfo.MaintenanceMargin
+				a.accounts[i].MoneyReserved = accInfo.MoneyReserved
+				a.accounts[i].FirstTradeDate = accInfo.FirstTradeDate
+				a.accounts[i].FirstNonTradeDate = accInfo.FirstNonTradeDate
 				break
 			}
 		}
@@ -102,6 +114,12 @@ func (a *App) applyAccountData(accountID string, pos []models.Position, quotes m
 		updatePositionsTable(a)
 		updateInfoPanel(a)
 		updateStatusBar(a)
+
+		// The overview is computed from exactly the data that just changed, and
+		// only while it is on screen.
+		if a.onAnalyticsTab() {
+			updateAnalyticsOverview(a)
+		}
 
 		// Positions changed, so the stream subscription may need to too.
 		a.recomputeStreamSymbols()
