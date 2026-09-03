@@ -22,6 +22,12 @@ func setupInputHandlers(app *App) {
 			app.pollIndexQuotesAsync(true)
 			return
 		}
+		// Analytics is account-independent for the same reason: the quota
+		// table belongs to the token, and the overview redraws from memory.
+		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
+			app.RefreshAnalytics()
+			return
+		}
 		if app.selectedIdx < len(app.accounts) {
 			accountID := app.accounts[app.selectedIdx].ID
 			switch app.portfolioView.TabbedView.ActiveTab {
@@ -83,6 +89,10 @@ func setupInputHandlers(app *App) {
 			app.app.SetFocus(app.portfolioView.TabbedView.IndexTable)
 		case TabAnalytics:
 			app.app.SetFocus(app.portfolioView.TabbedView.Analytics.Focusable())
+		}
+
+		if tab == TabAnalytics {
+			app.EnterAnalyticsTab()
 		}
 
 		// Same reason as in refresh: the Index tab has no account to wait for.
@@ -389,6 +399,15 @@ func setupInputHandlers(app *App) {
 			quit()
 			return nil
 		}
+		// Digit keys pick an Analytics sub-screen, but only while that tab is
+		// on screen — elsewhere they must reach whatever has focus.
+		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
+			if screen, ok := analyticsScreenForDigit(event.Rune()); ok {
+				app.SetAnalyticsScreen(screen)
+				return nil
+			}
+		}
+
 		switch event.Rune() {
 		case 'q', 'Q', 'й', 'Й':
 			quit()

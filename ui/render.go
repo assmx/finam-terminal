@@ -616,6 +616,9 @@ func updateStatusBar(app *App) {
 			app.app.GetFocus() == app.portfolioView.TabbedView.OrdersTable {
 			shortcuts += " | [yellow]X[white] Cancel [yellow]E[white] Modify [yellow]R[white] Refresh"
 		}
+		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
+			shortcuts += " | [yellow]1-2[white] Экран [yellow]R[white] Обновить"
+		}
 		// Check if TabbedView.IndexTable is active and focused
 		if app.portfolioView.TabbedView.ActiveTab == TabIndex &&
 			app.app.GetFocus() == app.portfolioView.TabbedView.IndexTable {

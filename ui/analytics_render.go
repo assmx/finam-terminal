@@ -169,3 +169,13 @@ func createQuotaTable() *tview.Table {
 	table.SetFixed(1, 0)
 	return table
 }
+
+// updateAnalyticsOverview redraws the overview from state already in memory.
+// Filled in by the next task; the tab's navigation is wired against it now.
+func updateAnalyticsOverview(_ *App) {}
+
+// updateQuotaTable redraws the API quota table from the cached answer.
+func updateQuotaTable(_ *App) {}
+
+// updateQuotaStatus redraws the API sub-screen's status line.
+func updateQuotaStatus(_ *App) {}

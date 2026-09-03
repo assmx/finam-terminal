@@ -130,6 +130,9 @@ type App struct {
 	indexStreamProven   bool
 	indexStreamDisabled bool
 
+	// Analytics tab
+	analytics *analyticsState
+
 	// Profile overlay
 	profilePanel     *ProfilePanel
 	profileSymbol    string
@@ -165,6 +168,7 @@ func NewApp(client APIClient, accounts []models.AccountInfo) *App {
 		selectedIdx:  0,
 		stopChan:     make(chan struct{}),
 		pages:        tview.NewPages(),
+		analytics:    newAnalyticsState(),
 	}
 	a.portfolioView = NewPortfolioView(a.app)
 	a.header = createHeader()
