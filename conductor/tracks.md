@@ -179,3 +179,14 @@ This file tracks all major tracks for the project. Each track has its own detail
 *Spec: [./tracks/index_tab_20260826/spec.md](./tracks/index_tab_20260826/spec.md)*
 *Plan: [./tracks/index_tab_20260826/plan.md](./tracks/index_tab_20260826/plan.md)*
 *Phases: 6 | Tasks: 16*
+
+
+---
+
+
+- [ ] **Track: Вкладка Analytics — обзор портфеля, маржа и риск, квоты API**
+
+*Link: [./tracks/analytics_overview_20260903/](./tracks/analytics_overview_20260903/)*
+*Spec: [./tracks/analytics_overview_20260903/spec.md](./tracks/analytics_overview_20260903/spec.md)*
+*Plan: [./tracks/analytics_overview_20260903/plan.md](./tracks/analytics_overview_20260903/plan.md)*
+*Phases: 5 | Tasks: 15*
