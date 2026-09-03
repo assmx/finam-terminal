@@ -57,6 +57,13 @@ type APIClient interface {
 	// Index composition (GetConstituents, cached per session)
 	GetIndexConstituents(indexSymbol string) ([]models.IndexConstituent, error)
 
+	// Analytics. GetInstrumentType is a pure read of the startup asset cache
+	// and issues no request, so the overview may call it on every tick;
+	// GetUsageMetrics is a real request and is made only on entering the API
+	// sub-screen and on R.
+	GetInstrumentType(symbol string) string
+	GetUsageMetrics() ([]models.QuotaUsage, error)
+
 	// Corporate action calendars
 	GetDividends(symbol string) ([]models.Dividend, error)
 	GetSplits(symbol string) ([]models.Split, error)

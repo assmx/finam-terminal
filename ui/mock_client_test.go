@@ -42,6 +42,15 @@ type mockClient struct {
 
 	GetIndexConstituentsFunc  func(indexSymbol string) ([]models.IndexConstituent, error)
 	GetIndexConstituentsCalls atomic.Int64
+
+	// Analytics. The call counters exist for the budget assertions the track
+	// rests on: the overview must redraw on a tick with GetUsageMetricsCalls
+	// unchanged, and GetInstrumentTypeCalls proves the type lookup stays a
+	// memory read rather than becoming a request.
+	GetInstrumentTypeFunc  func(symbol string) string
+	GetInstrumentTypeCalls atomic.Int64
+	GetUsageMetricsFunc    func() ([]models.QuotaUsage, error)
+	GetUsageMetricsCalls   atomic.Int64
 }
 
 func (m *mockClient) GetAccounts() ([]models.AccountInfo, error) {
@@ -207,6 +216,22 @@ func (m *mockClient) GetIndexConstituents(indexSymbol string) ([]models.IndexCon
 	m.GetIndexConstituentsCalls.Add(1)
 	if m.GetIndexConstituentsFunc != nil {
 		return m.GetIndexConstituentsFunc(indexSymbol)
+	}
+	return nil, nil
+}
+
+func (m *mockClient) GetInstrumentType(symbol string) string {
+	m.GetInstrumentTypeCalls.Add(1)
+	if m.GetInstrumentTypeFunc != nil {
+		return m.GetInstrumentTypeFunc(symbol)
+	}
+	return ""
+}
+
+func (m *mockClient) GetUsageMetrics() ([]models.QuotaUsage, error) {
+	m.GetUsageMetricsCalls.Add(1)
+	if m.GetUsageMetricsFunc != nil {
+		return m.GetUsageMetricsFunc()
 	}
 	return nil, nil
 }
