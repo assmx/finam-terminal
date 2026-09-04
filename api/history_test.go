@@ -851,3 +851,76 @@ func TestLoadHistory_FromAfterTo(t *testing.T) {
 		t.Errorf("Trades called %d times for a backwards window, want 0", calls)
 	}
 }
+
+// TestLoadHistory_SplitsTransactionsToo: the split path is shared, but the
+// record store is not — a bug in the transactions branch of dropRange would
+// duplicate every transaction in a truncated chunk while trades stayed clean.
+func TestLoadHistory_SplitsTransactionsToo(t *testing.T) {
+	noPace(t)
+	prev := historyLimit
+	historyLimit = 3
+	t.Cleanup(func() { historyLimit = prev })
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	from := to.Add(-historyChunk)
+
+	all := make([]*accounts.Transaction, 0, 6)
+	for i := range 6 {
+		all = append(all, txAt(fmt.Sprintf("X%d", i), from.Add(time.Duration(i+1)*historyChunk/7)))
+	}
+
+	rec := &historyRecorder{
+		txsIn: func(wf, wt time.Time, limit int32) []*accounts.Transaction {
+			var in []*accounts.Transaction
+			for _, tx := range all {
+				ts := tx.Timestamp.AsTime()
+				if !ts.Before(wf) && !ts.After(wt) {
+					in = append(in, tx)
+				}
+			}
+			if limit > 0 && len(in) > int(limit) {
+				in = in[len(in)-int(limit):]
+			}
+			return in
+		},
+	}
+	client := historyClient(rec, nil, nil)
+
+	bundle, err := client.LoadHistory(context.Background(), HistoryRequest{
+		AccountID:        "ACC001",
+		TransactionsFrom: from,
+		To:               to,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(bundle.Transactions) != 6 {
+		t.Errorf("got %d transactions, want all 6 recovered by splitting", len(bundle.Transactions))
+	}
+	seen := map[string]int{}
+	for _, tx := range bundle.Transactions {
+		seen[tx.ID]++
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("transaction %s appears %d times", id, n)
+		}
+	}
+}
+
+// TestResetSuffix renders the reset time only when the API reported one. Most
+// quotas carry none, and "resets at 03:00:00" from a zero time would be a lie.
+func TestResetSuffix(t *testing.T) {
+	if got := resetSuffix(time.Time{}); got != "" {
+		t.Errorf("resetSuffix(zero) = %q, want an empty string", got)
+	}
+	at := time.Date(2026, 9, 4, 19, 4, 20, 0, time.UTC)
+	got := resetSuffix(at)
+	if got == "" {
+		t.Fatal("resetSuffix dropped a real reset time")
+	}
+	if want := at.Local().Format("15:04:05"); !contains(got, want) {
+		t.Errorf("resetSuffix(%v) = %q, want it to contain %q", at, got, want)
+	}
+}
