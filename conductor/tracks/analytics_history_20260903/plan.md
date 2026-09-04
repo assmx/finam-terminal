@@ -7,7 +7,7 @@
 - [x] Task: Одноразовая программа с реальным токеном: `Trades`/`Transactions` с интервалом в несколько лет, с `limit` = 0 и с большим `limit` (усечение, максимум, объём полной истории); категория и поле `trade` у транзакций сделок, символ у COMMISSION; `Bars` по `IMOEX@RTSX` (дневные, два окна); формат `AccountTrade.Symbol`/`Transaction.Symbol`; формат цены облигационной позиции, если не решён в треке 1. Результаты в spec.md, константы `historyChunk`/`historyLimit` выставлены, временный код удалён (d56f48d)
   - Acceptance: spec.md дополнен разделом с фактами; константы и таблица категорий зафиксированы
 
-## Phase 2: Модели и API-слой
+## Phase 2: Модели и API-слой [checkpoint: cd661e7]
 - [x] Task: (Red→Green) `models.Transaction`/`TransactionTrade` + `Client.GetTransactions(accountID, from, to, limit)` (маппинг категории по имени enum, `change` в число и валюту, `change_qty`, `trade`, `logGRPCError`) + `MockAccountsServer.Transactions` (фикстура `DefaultTransactions()` со всеми категориями, включая записи со сделкой и иновалютный ввод; учёт `interval`/`limit`; `TransactionsError`; счётчик); юнит-тест маппинга и интеграционные тесты (e4e3ada)
   - Acceptance: тесты зелёные
 - [x] Task: (Red→Green) `Client.GetTrades(accountID, from, to, limit)` + `GetTradeHistory` как обёртка (30 дней, `limit` 0); `MockAccountsServer.Trades` учитывает `interval`/`limit` и настраиваемый потолок усечения `TradesLimitCap`; тесты: обёртка даёт прежний результат (существующие тесты History не меняются), фильтр по интервалу, усечение (d6d5e9d)
