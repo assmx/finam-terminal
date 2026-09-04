@@ -20,6 +20,10 @@ type Lot struct {
 	Short bool
 	Time  time.Time
 
+	// Name is the instrument's human-readable name, carried from the trade so
+	// a table row can be labelled without a second lookup.
+	Name string
+
 	// TradeID is the trade that opened the lot, kept so a closed pair can be
 	// traced back to its source.
 	TradeID string
@@ -36,6 +40,7 @@ type Lot struct {
 // unchanged quote can still show a result.
 type ClosedTrade struct {
 	Symbol     string
+	Name       string
 	Currency   string
 	Qty        float64
 	EntryPrice float64
@@ -166,13 +171,13 @@ func (r *FIFOResult) apply(symbol string, t models.Trade, short bool, qty, price
 		if short {
 			r.Unmatched[symbol] += qty
 		}
-		r.Open[symbol] = append(lots, Lot{Qty: qty, Price: price, Short: short, Time: t.Timestamp, TradeID: t.ID})
+		r.Open[symbol] = append(lots, Lot{Qty: qty, Price: price, Short: short, Time: t.Timestamp, Name: t.Name, TradeID: t.ID})
 		return
 	}
 
 	// Same direction as what is open: another lot on the pile.
 	if lots[0].Short == short {
-		r.Open[symbol] = append(lots, Lot{Qty: qty, Price: price, Short: short, Time: t.Timestamp, TradeID: t.ID})
+		r.Open[symbol] = append(lots, Lot{Qty: qty, Price: price, Short: short, Time: t.Timestamp, Name: t.Name, TradeID: t.ID})
 		return
 	}
 
@@ -189,6 +194,7 @@ func (r *FIFOResult) apply(symbol string, t models.Trade, short bool, qty, price
 
 		r.Closed = append(r.Closed, ClosedTrade{
 			Symbol:     symbol,
+			Name:       t.Name,
 			Currency:   t.Currency,
 			Qty:        closed,
 			EntryPrice: lot.Price,
