@@ -178,7 +178,10 @@ func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 			log.Printf("[WARN] Failed to load history for %s: %v", account.ID, err)
 		}
 
-		a.queueDraw(a.updateAnalyticsHistoryStatus)
+		a.queueDraw(func() {
+			a.updateAnalyticsHistoryStatus()
+			updateAnalyticsHistoryScreens(a)
+		})
 	}()
 }
 

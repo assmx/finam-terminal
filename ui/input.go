@@ -176,6 +176,12 @@ func setupInputHandlers(app *App) {
 					}
 					return nil
 				}
+				if table == app.portfolioView.TabbedView.Analytics.TradesTable {
+					if symbol := app.selectedTradeSymbol(); symbol != "" {
+						app.OpenProfileForSymbol(symbol)
+					}
+					return nil
+				}
 			case tcell.KeyDelete:
 				if table == app.portfolioView.TabbedView.OrdersTable {
 					app.ShowCancelConfirmation()
@@ -197,6 +203,11 @@ func setupInputHandlers(app *App) {
 					// The composition carries full ticker@mic symbols, so the
 					// instrument goes through the existing order path unchanged.
 					if symbol := app.selectedIndexSymbol(); symbol != "" {
+						app.OpenOrderModalWithTicker(symbol)
+					}
+				}
+				if table == app.portfolioView.TabbedView.Analytics.TradesTable {
+					if symbol := app.selectedTradeSymbol(); symbol != "" {
 						app.OpenOrderModalWithTicker(symbol)
 					}
 				}
@@ -228,6 +239,8 @@ func setupInputHandlers(app *App) {
 	setupTableNavigation(app.portfolioView.TabbedView.HistoryTable)
 	setupTableNavigation(app.portfolioView.TabbedView.OrdersTable)
 	setupTableNavigation(app.portfolioView.TabbedView.IndexTable)
+	setupTableNavigation(app.portfolioView.TabbedView.Analytics.TradesTable)
+	setupTableNavigation(app.portfolioView.TabbedView.Analytics.PayoutTable)
 
 	app.portfolioView.AccountTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {

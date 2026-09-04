@@ -78,6 +78,8 @@ func (a *App) NextAnalyticsPeriod() {
 	switch view.ActiveScreen {
 	case AnalyticsOverview:
 		updateAnalyticsOverview(a)
+	case AnalyticsTrades, AnalyticsMoney:
+		updateAnalyticsHistoryScreens(a)
 	}
 	updateStatusBar(a)
 }
@@ -101,6 +103,7 @@ func (a *App) SetAnalyticsScreen(screen AnalyticsScreen) {
 	case AnalyticsTrades, AnalyticsMoney:
 		a.ensureHistoryLoaded()
 		a.updateAnalyticsHistoryStatus()
+		updateAnalyticsHistoryScreens(a)
 	case AnalyticsQuotas:
 		a.ensureQuotasLoaded()
 		updateQuotaTable(a)
