@@ -16,7 +16,7 @@
   - Acceptance: тесты зелёные; пауза и константы — переменные пакета
 - [x] Task: (Red→Green) Кеш календарей 24 ч по символу в `GetDividends`/`GetSplits`/`GetBondEvents` (`calendarCacheTTL`, неудача не кешируется, пустой успех кешируется) + поле `When time.Time` в `Dividend`/`BondEvent`; интеграционные тесты: второй вызов за 0 RPC, ошибка → повтор, `When` заполнено (73d2fa5)
   - Acceptance: тесты зелёные; тесты профиля не сломаны
-- [~] Task: `ui.APIClient` + мок-клиент ui-тестов: `LoadHistory` (мок с настраиваемым bundle, задержкой и счётчиком), счётчики `GetBars`/`GetDividends`/`GetBondEvents`
+- [x] Task: `ui.APIClient` + мок-клиент ui-тестов: `LoadHistory` (мок с настраиваемым bundle, задержкой и счётчиком), счётчики `GetBars`/`GetDividends`/`GetBondEvents` (9efe83d)
   - Acceptance: `go build ./... && go vet ./...` чистые; существующие ui-тесты зелёные
 
 ## Phase 3: Пакет analytics — FIFO, периоды, статистика
