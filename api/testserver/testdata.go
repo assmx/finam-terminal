@@ -583,3 +583,19 @@ func DefaultTransactions() []*accounts.Transaction {
 		},
 	}
 }
+
+// LowTradesQuota returns a quota table whose AccountsService.trades entry is
+// nearly spent, so a long history pass has to be refused before it starts.
+//
+// The other two entries are the collisions that make suffix matching on the
+// bare method name wrong: both end in "Trades" and neither is the quota the
+// loader spends.
+func LowTradesQuota() []*metrics.GetUsageMetricsResponse_QuotaUsage {
+	return []*metrics.GetUsageMetricsResponse_QuotaUsage{
+		{Name: "AccountsService.trades", Limit: 200, Remaining: 21,
+			ResetTime: timestamppb.New(time.Now().Add(37 * time.Second))},
+		{Name: "AccountsService.transactions", Limit: 200, Remaining: 200},
+		{Name: "OrdersService.subscribeTrades", Limit: 200, Remaining: 200},
+		{Name: "MarketDataService.latestTrades", Limit: 200, Remaining: 200},
+	}
+}
