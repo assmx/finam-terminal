@@ -14,7 +14,7 @@
   - Acceptance: тесты зелёные; тесты вкладки History не изменены
 - [x] Task: (Red→Green) `api/history.go`: `HistoryRequest`/`HistoryProgress`/`HistoryBundle`/`StopReason` и `LoadHistory` — чанки от `To` назад, деление чанка при ответе длиной `limit` до минимума в один день, пауза `historyPace`, свой контекст на запрос, предохранитель `historyMaxRequests`, сделки затем транзакции, прогресс, `[INFO]` на проход; предпроверка квот (оценка на метод, порог 5, резерв 20, сопоставление по суффиксу, fail-open); юнит-тесты с моками (деление, предохранитель, `ResourceExhausted` → частичные данные, ошибка → частичные данные, отмена контекста, предпроверка в трёх исходах) и интеграционные (число запросов по чанкам, усечение, полная история, окно догрузки) (e5b16b0)
   - Acceptance: тесты зелёные; пауза и константы — переменные пакета
-- [~] Task: (Red→Green) Кеш календарей 24 ч по символу в `GetDividends`/`GetSplits`/`GetBondEvents` (`calendarCacheTTL`, неудача не кешируется, пустой успех кешируется) + поле `When time.Time` в `Dividend`/`BondEvent`; интеграционные тесты: второй вызов за 0 RPC, ошибка → повтор, `When` заполнено
+- [x] Task: (Red→Green) Кеш календарей 24 ч по символу в `GetDividends`/`GetSplits`/`GetBondEvents` (`calendarCacheTTL`, неудача не кешируется, пустой успех кешируется) + поле `When time.Time` в `Dividend`/`BondEvent`; интеграционные тесты: второй вызов за 0 RPC, ошибка → повтор, `When` заполнено (73d2fa5)
   - Acceptance: тесты зелёные; тесты профиля не сломаны
 - [ ] Task: `ui.APIClient` + мок-клиент ui-тестов: `LoadHistory` (мок с настраиваемым bundle, задержкой и счётчиком), счётчики `GetBars`/`GetDividends`/`GetBondEvents`
   - Acceptance: `go build ./... && go vet ./...` чистые; существующие ui-тесты зелёные
