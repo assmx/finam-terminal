@@ -406,6 +406,13 @@ func setupInputHandlers(app *App) {
 				app.SetAnalyticsScreen(screen)
 				return nil
 			}
+			// P steps the period. Confined to this tab for the same reason as
+			// the digits: elsewhere the key belongs to whatever has focus.
+			switch event.Rune() {
+			case 'p', 'P', 'з', 'З':
+				app.NextAnalyticsPeriod()
+				return nil
+			}
 		}
 
 		switch event.Rune() {

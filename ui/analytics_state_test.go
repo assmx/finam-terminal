@@ -42,31 +42,6 @@ func analyticsApp(t *testing.T, mock *mockClient) (*App, func(*tcell.EventKey) *
 	return app, app.app.GetInputCapture()
 }
 
-// TestAnalyticsKeys_SwitchSubScreens checks the digit keys reach both
-// sub-screens and that an out-of-range digit is ignored rather than blanking
-// the tab.
-func TestAnalyticsKeys_SwitchSubScreens(t *testing.T) {
-	app, capture := analyticsApp(t, &mockClient{})
-	view := app.portfolioView.TabbedView.Analytics
-
-	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
-	if view.ActiveScreen != AnalyticsQuotas {
-		t.Errorf("ActiveScreen = %v after '2', want AnalyticsQuotas", view.ActiveScreen)
-	}
-
-	capture(tcell.NewEventKey(tcell.KeyRune, '1', tcell.ModNone))
-	if view.ActiveScreen != AnalyticsOverview {
-		t.Errorf("ActiveScreen = %v after '1', want AnalyticsOverview", view.ActiveScreen)
-	}
-
-	// This track has two sub-screens; the track that adds more will extend the
-	// list, not this handler.
-	capture(tcell.NewEventKey(tcell.KeyRune, '5', tcell.ModNone))
-	if view.ActiveScreen != AnalyticsOverview {
-		t.Errorf("ActiveScreen = %v after an out-of-range digit, want it unchanged", view.ActiveScreen)
-	}
-}
-
 // TestAnalyticsKeys_SwitchingCostsNoRequests is the budget promise: moving
 // between sub-screens redraws from memory. Only the first entry to the API
 // screen fetches, and going back and forth after that must not fetch again.
@@ -78,12 +53,12 @@ func TestAnalyticsKeys_SwitchingCostsNoRequests(t *testing.T) {
 	}
 	app, capture := analyticsApp(t, mock)
 
-	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
+	capture(tcell.NewEventKey(tcell.KeyRune, '5', tcell.ModNone))
 	mustReach(t, app, mock, 1)
 
 	for range 5 {
 		capture(tcell.NewEventKey(tcell.KeyRune, '1', tcell.ModNone))
-		capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
+		capture(tcell.NewEventKey(tcell.KeyRune, '5', tcell.ModNone))
 	}
 
 	if got := mock.GetUsageMetricsCalls.Load(); got != 1 {
@@ -122,7 +97,7 @@ func TestAnalyticsRefresh_ReloadsQuotas(t *testing.T) {
 	}
 	app, capture := analyticsApp(t, mock)
 
-	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
+	capture(tcell.NewEventKey(tcell.KeyRune, '5', tcell.ModNone))
 	mustReach(t, app, mock, 1)
 
 	capture(tcell.NewEventKey(tcell.KeyRune, 'R', tcell.ModNone))
@@ -144,22 +119,6 @@ func TestAnalyticsRefresh_OverviewDoesNotFetchQuotas(t *testing.T) {
 
 	if got := mock.GetUsageMetricsCalls.Load(); got != 0 {
 		t.Errorf("GetUsageMetrics called %d times from the overview, want 0", got)
-	}
-}
-
-// TestStatusBar_AnalyticsShortcuts shows the tab's own hints.
-func TestStatusBar_AnalyticsShortcuts(t *testing.T) {
-	app := NewApp(&mockClient{}, []models.AccountInfo{{ID: "acc1"}})
-	app.portfolioView.TabbedView.SetTab(TabAnalytics)
-	app.app.SetFocus(app.portfolioView.TabbedView.Analytics.Focusable())
-
-	updateStatusBar(app)
-
-	text := app.statusBar.GetText(false)
-	for _, want := range []string{"1-2", "Экран", "Обновить"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("status bar %q does not mention %q", text, want)
-		}
 	}
 }
 

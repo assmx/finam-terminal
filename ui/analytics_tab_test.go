@@ -65,7 +65,7 @@ func TestAnalyticsView_SubScreenHeader(t *testing.T) {
 	view := NewAnalyticsView()
 
 	header := view.Header.GetText(false)
-	for _, want := range []string{"[1] Обзор", "[2] API"} {
+	for _, want := range []string{"[1] Обзор", "[2] Сделки", "[3] Деньги", "[4] Выплаты", "[5] API"} {
 		if !strings.Contains(header, want) {
 			t.Errorf("sub-screen header %q does not contain %q", header, want)
 		}
@@ -81,7 +81,7 @@ func TestAnalyticsView_HighlightsActiveSubScreen(t *testing.T) {
 	if name, _ := view.Pages.GetFrontPage(); name != "quotas" {
 		t.Errorf("front page = %q, want \"quotas\"", name)
 	}
-	if header := view.Header.GetText(false); !strings.Contains(header, "[black:yellow][2] API[-]") {
+	if header := view.Header.GetText(false); !strings.Contains(header, "[black:yellow][5] API[-]") {
 		t.Errorf("header %q does not highlight the API sub-screen", header)
 	}
 

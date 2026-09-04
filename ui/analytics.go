@@ -4,6 +4,7 @@ import (
 	"log"
 	"time"
 
+	"finam-terminal/analytics"
 	"finam-terminal/api"
 	"finam-terminal/models"
 )
@@ -23,14 +24,51 @@ type analyticsState struct {
 	quotasErr     string
 	quotasAt      time.Time
 
+	// period is the window the Trades and Money screens use. One choice per
+	// session rather than per account: it describes how the user wants to
+	// look, not what they are looking at.
+	period analytics.Preset
+
 	byAccount map[string]*analyticsAccountData
 }
 
-// analyticsAccountData is the per-account slot the second track fills.
+// analyticsAccountData is what the tab remembers for one account. The history
+// and payout caches land here in the next task.
 type analyticsAccountData struct{}
 
 func newAnalyticsState() *analyticsState {
-	return &analyticsState{byAccount: make(map[string]*analyticsAccountData)}
+	return &analyticsState{
+		period:    analytics.DefaultPreset,
+		byAccount: make(map[string]*analyticsAccountData),
+	}
+}
+
+// AnalyticsPeriod is the window the Trades and Money screens currently use.
+func (a *App) AnalyticsPeriod() analytics.Preset {
+	a.dataMutex.RLock()
+	defer a.dataMutex.RUnlock()
+	return a.analytics.period
+}
+
+// NextAnalyticsPeriod is the P key: step to the next preset and redraw.
+//
+// It makes no request. Every preset is a filter over the history already in
+// memory, which is the whole reason the loader pays for a full pass once
+// rather than a window at a time.
+func (a *App) NextAnalyticsPeriod() {
+	a.dataMutex.Lock()
+	a.analytics.period = a.analytics.period.Next()
+	period := a.analytics.period
+	a.dataMutex.Unlock()
+
+	view := a.analyticsView()
+	view.SetPeriod(period)
+
+	switch view.ActiveScreen {
+	case AnalyticsOverview:
+		updateAnalyticsOverview(a)
+	}
+	updateStatusBar(a)
 }
 
 // analyticsView is a shorthand for the tab's widgets.
