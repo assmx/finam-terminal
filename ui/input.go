@@ -182,6 +182,12 @@ func setupInputHandlers(app *App) {
 					}
 					return nil
 				}
+				if table == app.portfolioView.TabbedView.Analytics.PayoutTable {
+					if symbol := app.selectedPayoutSymbol(); symbol != "" {
+						app.OpenProfileForSymbol(symbol)
+					}
+					return nil
+				}
 			case tcell.KeyDelete:
 				if table == app.portfolioView.TabbedView.OrdersTable {
 					app.ShowCancelConfirmation()
@@ -208,6 +214,11 @@ func setupInputHandlers(app *App) {
 				}
 				if table == app.portfolioView.TabbedView.Analytics.TradesTable {
 					if symbol := app.selectedTradeSymbol(); symbol != "" {
+						app.OpenOrderModalWithTicker(symbol)
+					}
+				}
+				if table == app.portfolioView.TabbedView.Analytics.PayoutTable {
+					if symbol := app.selectedPayoutSymbol(); symbol != "" {
 						app.OpenOrderModalWithTicker(symbol)
 					}
 				}

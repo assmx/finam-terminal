@@ -45,6 +45,14 @@ type analyticsAccountData struct {
 
 	benchmark   analytics.Benchmark
 	benchmarkOK bool
+
+	// Payouts are built from the calendars, which are themselves cached per
+	// symbol for a day — so a refresh here is nearly always free.
+	payouts        []analytics.Payout
+	payoutTotals   analytics.PayoutTotals
+	payoutsAt      time.Time
+	payoutsErr     string
+	payoutsLoading bool
 }
 
 func newAnalyticsState() *analyticsState {
@@ -104,6 +112,9 @@ func (a *App) SetAnalyticsScreen(screen AnalyticsScreen) {
 		a.ensureHistoryLoaded()
 		a.updateAnalyticsHistoryStatus()
 		updateAnalyticsHistoryScreens(a)
+	case AnalyticsPayouts:
+		a.ensurePayoutsLoaded()
+		updatePayoutScreen(a)
 	case AnalyticsQuotas:
 		a.ensureQuotasLoaded()
 		updateQuotaTable(a)
@@ -142,6 +153,8 @@ func (a *App) RefreshAnalytics() {
 		updateAnalyticsOverview(a)
 	case AnalyticsTrades, AnalyticsMoney:
 		a.refreshHistoryTail()
+	case AnalyticsPayouts:
+		a.refreshPayouts()
 	case AnalyticsQuotas:
 		a.loadQuotasAsync()
 	}
