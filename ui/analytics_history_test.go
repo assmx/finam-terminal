@@ -60,6 +60,17 @@ func historyApp(t *testing.T, mock *mockClient, accounts ...models.AccountInfo) 
 // waitHistory waits for the loader to have run n times and settled.
 func waitHistory(t *testing.T, app *App, mock *mockClient, n int64) {
 	t.Helper()
+	waitHistoryFor(t, app, mock, "acc1", n)
+}
+
+// waitHistoryFor is waitHistory for a named account.
+//
+// Waiting on the call counter alone is not enough and was the cause of a flake:
+// the counter is incremented as the request starts, while the cache is written
+// after it returns. A test that reads the cache on the counter alone races the
+// goroutine it just triggered.
+func waitHistoryFor(t *testing.T, app *App, mock *mockClient, accountID string, n int64) {
+	t.Helper()
 
 	if !waitFor(func() bool { return mock.LoadHistoryCalls.Load() >= n }) {
 		t.Fatalf("LoadHistory called %d times, want %d", mock.LoadHistoryCalls.Load(), n)
@@ -67,10 +78,10 @@ func waitHistory(t *testing.T, app *App, mock *mockClient, n int64) {
 	if !waitFor(func() bool {
 		app.dataMutex.RLock()
 		defer app.dataMutex.RUnlock()
-		data := app.analytics.byAccount["acc1"]
-		return data != nil && !data.loading
+		data := app.analytics.byAccount[accountID]
+		return data != nil && !data.loading && !data.historyAt.IsZero()
 	}) {
-		t.Fatal("the history load never settled")
+		t.Fatalf("the history load for %s never settled", accountID)
 	}
 }
 
@@ -149,9 +160,7 @@ func TestHistory_PerAccount(t *testing.T) {
 	app.dataMutex.Unlock()
 	app.EnterAnalyticsTab()
 
-	if !waitFor(func() bool { return mock.LoadHistoryCalls.Load() >= 2 }) {
-		t.Fatalf("LoadHistory called %d times after switching accounts, want 2", mock.LoadHistoryCalls.Load())
-	}
+	waitHistoryFor(t, app, mock, "acc2", 2)
 
 	app.dataMutex.RLock()
 	first := app.analytics.byAccount["acc1"]
@@ -503,5 +512,174 @@ func TestHistory_BenchmarkFailureIsNotFatal(t *testing.T) {
 	}
 	if benchOK {
 		t.Error("the benchmark reports success after a failed request")
+	}
+}
+
+// TestHistoryHorizon covers the window one pass covers, including the case the
+// broker actually produces: money arrives before the first purchase.
+func TestHistoryHorizon(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	trade := now.AddDate(-2, 0, 0)
+	money := now.AddDate(-3, 0, 0)
+
+	cases := []struct {
+		name             string
+		account          models.AccountInfo
+		wantTrades       time.Time
+		wantTransactions time.Time
+	}{
+		{
+			name:             "money before the first trade",
+			account:          models.AccountInfo{ID: "a", FirstTradeDate: trade, FirstNonTradeDate: money},
+			wantTrades:       trade,
+			wantTransactions: money,
+		},
+		{
+			name:             "only a first trade",
+			account:          models.AccountInfo{ID: "a", FirstTradeDate: trade},
+			wantTrades:       trade,
+			wantTransactions: trade,
+		},
+		{
+			name:             "only a first movement: an account that never traded",
+			account:          models.AccountInfo{ID: "a", FirstNonTradeDate: money},
+			wantTrades:       time.Time{},
+			wantTransactions: money,
+		},
+		{
+			name:             "nothing known",
+			account:          models.AccountInfo{ID: "a"},
+			wantTrades:       time.Time{},
+			wantTransactions: time.Time{},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := historyHorizon(c.account, now)
+			if !req.TradesFrom.Equal(c.wantTrades) {
+				t.Errorf("TradesFrom = %v, want %v", req.TradesFrom, c.wantTrades)
+			}
+			if !req.TransactionsFrom.Equal(c.wantTransactions) {
+				t.Errorf("TransactionsFrom = %v, want %v", req.TransactionsFrom, c.wantTransactions)
+			}
+			if !req.To.Equal(now) {
+				t.Errorf("To = %v, want %v", req.To, now)
+			}
+		})
+	}
+}
+
+// TestHistoryStatusText renders every state the cache can be in.
+func TestHistoryStatusText(t *testing.T) {
+	boundary := time.Date(2024, 5, 12, 0, 0, 0, 0, time.UTC)
+	bundle := func(stop api.StopReason, complete bool) *api.HistoryBundle {
+		return &api.HistoryBundle{Boundary: boundary, Complete: complete, Stop: stop}
+	}
+
+	cases := []struct {
+		name string
+		data analyticsAccountData
+		want string
+	}{
+		{"nothing loaded", analyticsAccountData{}, ""},
+		{"in progress", analyticsAccountData{progress: "идёт загрузка"}, "идёт загрузка"},
+		{"an error wins over a stale bundle",
+			analyticsAccountData{historyErr: "не удалось", history: bundle(api.StopNone, true)}, "не удалось"},
+		{"complete", analyticsAccountData{history: bundle(api.StopNone, true)}, ""},
+		{"quota", analyticsAccountData{history: bundle(api.StopQuota, false)}, "квот"},
+		{"rate limited", analyticsAccountData{history: bundle(api.StopRateLimited, false)}, "лимит API"},
+		{"error mid-pass", analyticsAccountData{history: bundle(api.StopError, false)}, "прервана"},
+		{"guard", analyticsAccountData{history: bundle(api.StopGuard, false)}, "12.05.2024"},
+		{"incomplete without a reason", analyticsAccountData{history: bundle(api.StopNone, false)}, "12.05.2024"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := historyStatusText(c.data)
+			if c.want == "" {
+				if got != "" {
+					t.Errorf("status = %q, want empty", got)
+				}
+				return
+			}
+			if !strings.Contains(got, c.want) {
+				t.Errorf("status = %q, want it to mention %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestHistoryProgressText reports how far a pass has got, with and without an
+// estimate to measure against.
+func TestHistoryProgressText(t *testing.T) {
+	boundary := time.Date(2024, 5, 12, 0, 0, 0, 0, time.UTC)
+
+	withEstimate := historyProgressText(api.HistoryProgress{Requests: 14, Estimated: 40, Boundary: boundary})
+	for _, want := range []string{"14", "40", "12.05.2024"} {
+		if !strings.Contains(withEstimate, want) {
+			t.Errorf("progress %q does not mention %q", withEstimate, want)
+		}
+	}
+
+	// An estimate of zero must not render "из ~0".
+	withoutEstimate := historyProgressText(api.HistoryProgress{Requests: 3})
+	if strings.Contains(withoutEstimate, "~0") {
+		t.Errorf("progress %q advertises an estimate of zero", withoutEstimate)
+	}
+	if !strings.Contains(withoutEstimate, "3") {
+		t.Errorf("progress %q does not show the request count", withoutEstimate)
+	}
+}
+
+// TestFormatHistoryDate: a boundary that was never established renders as a
+// dash rather than as year one.
+func TestFormatHistoryDate(t *testing.T) {
+	if got := formatHistoryDate(time.Time{}); got != "—" {
+		t.Errorf("formatHistoryDate(zero) = %q, want a dash", got)
+	}
+	at := time.Date(2024, 5, 12, 0, 0, 0, 0, time.Local)
+	if got := formatHistoryDate(at); got != "12.05.2024" {
+		t.Errorf("formatHistoryDate = %q, want 12.05.2024", got)
+	}
+}
+
+// TestMergeHistory covers the folding rules directly, including the one that
+// matters most: a clean top-up must not erase the fact that the original pass
+// was truncated.
+func TestMergeHistory(t *testing.T) {
+	early := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	late := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	cached := &api.HistoryBundle{
+		Trades:   []models.Trade{{ID: "old", Timestamp: early}},
+		Boundary: early,
+		Complete: false,
+		Stop:     api.StopGuard,
+	}
+	fresh := &api.HistoryBundle{
+		Trades:   []models.Trade{{ID: "new", Timestamp: late}},
+		Boundary: late,
+		Complete: true,
+		Stop:     api.StopNone,
+	}
+
+	merged := mergeHistory(cached, fresh)
+	if len(merged.Trades) != 2 {
+		t.Errorf("merged %d trades, want both", len(merged.Trades))
+	}
+	if !merged.Boundary.Equal(early) {
+		t.Errorf("Boundary = %v, want the deeper of the two (%v)", merged.Boundary, early)
+	}
+	if merged.Complete {
+		t.Error("Complete = true; a top-up cannot complete a truncated pass")
+	}
+	if merged.Stop != api.StopGuard {
+		t.Errorf("Stop = %v, want the original truncation to survive", merged.Stop)
+	}
+
+	if got := mergeHistory(nil, fresh); got != fresh {
+		t.Error("merging into an empty cache did not return the fresh bundle")
+	}
+	if got := mergeHistory(cached, nil); got != cached {
+		t.Error("merging nothing into a cache did not return the cache")
 	}
 }
