@@ -32,9 +32,20 @@ type analyticsState struct {
 	byAccount map[string]*analyticsAccountData
 }
 
-// analyticsAccountData is what the tab remembers for one account. The history
-// and payout caches land here in the next task.
-type analyticsAccountData struct{}
+// analyticsAccountData is everything the tab remembers for one account.
+//
+// History is loaded once per account per session, and every period is a filter
+// over it — this cache is what makes the period control free.
+type analyticsAccountData struct {
+	history    *api.HistoryBundle
+	historyAt  time.Time
+	historyErr string
+	loading    bool
+	progress   string
+
+	benchmark   analytics.Benchmark
+	benchmarkOK bool
+}
 
 func newAnalyticsState() *analyticsState {
 	return &analyticsState{
@@ -87,6 +98,9 @@ func (a *App) SetAnalyticsScreen(screen AnalyticsScreen) {
 	case AnalyticsOverview:
 		a.ensureIndexLoaded()
 		updateAnalyticsOverview(a)
+	case AnalyticsTrades, AnalyticsMoney:
+		a.ensureHistoryLoaded()
+		a.updateAnalyticsHistoryStatus()
 	case AnalyticsQuotas:
 		a.ensureQuotasLoaded()
 		updateQuotaTable(a)
@@ -123,6 +137,8 @@ func (a *App) RefreshAnalytics() {
 		// the index composition behind the sector line.
 		a.reloadIndexForSectors()
 		updateAnalyticsOverview(a)
+	case AnalyticsTrades, AnalyticsMoney:
+		a.refreshHistoryTail()
 	case AnalyticsQuotas:
 		a.loadQuotasAsync()
 	}

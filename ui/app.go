@@ -82,16 +82,22 @@ type APIClient interface {
 
 // App represents the TUI application
 type App struct {
-	app           *tview.Application
-	client        APIClient
-	accounts      []models.AccountInfo
-	positions     map[string][]models.Position
-	history       map[string][]models.Trade
-	activeOrders  map[string][]models.Order
-	quotes        map[string]map[string]*models.Quote
-	selectedIdx   int
-	dataMutex     DataMutex
-	stopChan      chan struct{}
+	app          *tview.Application
+	client       APIClient
+	accounts     []models.AccountInfo
+	positions    map[string][]models.Position
+	history      map[string][]models.Trade
+	activeOrders map[string][]models.Order
+	quotes       map[string]map[string]*models.Quote
+	selectedIdx  int
+	dataMutex    DataMutex
+	stopChan     chan struct{}
+
+	// ctx is cancelled when the application stops. Background passes that can
+	// run for a while — the history walk above all — take it, so a shutdown
+	// ends them instead of leaving them working against a closed screen.
+	ctx           context.Context
+	ctxCancel     context.CancelFunc
 	stopOnce      sync.Once
 	portfolioView *PortfolioView
 
@@ -180,6 +186,7 @@ func NewApp(client APIClient, accounts []models.AccountInfo) *App {
 		pages:        tview.NewPages(),
 		analytics:    newAnalyticsState(),
 	}
+	a.ctx, a.ctxCancel = context.WithCancel(context.Background())
 	a.portfolioView = NewPortfolioView(a.app)
 	a.header = createHeader()
 	a.statusBar = createStatusBar()
@@ -793,6 +800,9 @@ func (a *App) Run() error {
 func (a *App) Stop() {
 	a.stopOnce.Do(func() {
 		close(a.stopChan)
+		if a.ctxCancel != nil {
+			a.ctxCancel()
+		}
 		a.app.Stop()
 	})
 }
