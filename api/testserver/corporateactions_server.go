@@ -2,6 +2,7 @@ package testserver
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/corporateactions"
 )
@@ -23,6 +24,32 @@ type MockCorporateActionsServer struct {
 	DividendsError  error
 	SplitsError     error
 	BondEventsError error
+
+	// Call counters, one per RPC. The calendar cache promises that a second
+	// request for the same symbol inside a day costs nothing, and only a
+	// counter can show that.
+	PastDividendsCallCount    atomic.Int64
+	FutureDividendsCallCount  atomic.Int64
+	PastSplitsCallCount       atomic.Int64
+	FutureSplitsCallCount     atomic.Int64
+	PastBondEventsCallCount   atomic.Int64
+	FutureBondEventsCallCount atomic.Int64
+}
+
+// DividendCalls is how many dividend RPCs the server has answered, past and
+// future together.
+func (m *MockCorporateActionsServer) DividendCalls() int64 {
+	return m.PastDividendsCallCount.Load() + m.FutureDividendsCallCount.Load()
+}
+
+// SplitCalls is how many split RPCs the server has answered.
+func (m *MockCorporateActionsServer) SplitCalls() int64 {
+	return m.PastSplitsCallCount.Load() + m.FutureSplitsCallCount.Load()
+}
+
+// BondEventCalls is how many bond-event RPCs the server has answered.
+func (m *MockCorporateActionsServer) BondEventCalls() int64 {
+	return m.PastBondEventsCallCount.Load() + m.FutureBondEventsCallCount.Load()
 }
 
 // NewMockCorporateActionsServer creates a server populated with default fixtures.
@@ -41,6 +68,7 @@ func NewMockCorporateActionsServer() *MockCorporateActionsServer {
 }
 
 func (m *MockCorporateActionsServer) GetPastDividends(_ context.Context, req *corporateactions.GetPastDividendsRequest) (*corporateactions.GetPastDividendsResponse, error) {
+	m.PastDividendsCallCount.Add(1)
 	if m.DividendsError != nil {
 		return nil, m.DividendsError
 	}
@@ -48,6 +76,7 @@ func (m *MockCorporateActionsServer) GetPastDividends(_ context.Context, req *co
 }
 
 func (m *MockCorporateActionsServer) GetFutureDividends(_ context.Context, req *corporateactions.GetFutureDividendsRequest) (*corporateactions.GetFutureDividendsResponse, error) {
+	m.FutureDividendsCallCount.Add(1)
 	if m.DividendsError != nil {
 		return nil, m.DividendsError
 	}
@@ -55,6 +84,7 @@ func (m *MockCorporateActionsServer) GetFutureDividends(_ context.Context, req *
 }
 
 func (m *MockCorporateActionsServer) GetPastSplits(_ context.Context, req *corporateactions.GetPastSplitsRequest) (*corporateactions.GetPastSplitsResponse, error) {
+	m.PastSplitsCallCount.Add(1)
 	if m.SplitsError != nil {
 		return nil, m.SplitsError
 	}
@@ -62,6 +92,7 @@ func (m *MockCorporateActionsServer) GetPastSplits(_ context.Context, req *corpo
 }
 
 func (m *MockCorporateActionsServer) GetFutureSplits(_ context.Context, req *corporateactions.GetFutureSplitsRequest) (*corporateactions.GetFutureSplitsResponse, error) {
+	m.FutureSplitsCallCount.Add(1)
 	if m.SplitsError != nil {
 		return nil, m.SplitsError
 	}
@@ -69,6 +100,7 @@ func (m *MockCorporateActionsServer) GetFutureSplits(_ context.Context, req *cor
 }
 
 func (m *MockCorporateActionsServer) GetPastBondsEvents(_ context.Context, req *corporateactions.GetPastBondsEventsRequest) (*corporateactions.GetPastBondsEventsResponse, error) {
+	m.PastBondEventsCallCount.Add(1)
 	if m.BondEventsError != nil {
 		return nil, m.BondEventsError
 	}
@@ -76,6 +108,7 @@ func (m *MockCorporateActionsServer) GetPastBondsEvents(_ context.Context, req *
 }
 
 func (m *MockCorporateActionsServer) GetFutureBondsEvents(_ context.Context, req *corporateactions.GetFutureBondsEventsRequest) (*corporateactions.GetFutureBondsEventsResponse, error) {
+	m.FutureBondEventsCallCount.Add(1)
 	if m.BondEventsError != nil {
 		return nil, m.BondEventsError
 	}

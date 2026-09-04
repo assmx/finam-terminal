@@ -65,6 +65,12 @@ type Client struct {
 	securityCache       []models.SecurityInfo
 	assetMutex          sync.RWMutex
 
+	// Corporate-action calendars (dividends, splits, bond events), cached per
+	// symbol for calendarCacheTTL. These change on the scale of months, so the
+	// Payouts screen and the instrument profile share one day-long answer
+	// instead of spending two requests per position per refresh.
+	calendars calendarCache
+
 	// Index composition cache (GetConstituents), keyed by index symbol.
 	indexMu    sync.RWMutex
 	indexCache map[string]indexCacheEntry
@@ -1506,6 +1512,13 @@ const caCalendarLimit = 20
 // GetDividends returns the merged past (last 12 months, DESC) + future (ASC)
 // dividend calendar for a symbol, sorted ascending by date with IsFuture flags.
 func (c *Client) GetDividends(symbol string) ([]models.Dividend, error) {
+	return calendarCached(c, "dividends", symbol, func() ([]models.Dividend, error) {
+		return c.fetchDividends(symbol)
+	})
+}
+
+// fetchDividends performs the two uncached calls behind GetDividends.
+func (c *Client) fetchDividends(symbol string) ([]models.Dividend, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
@@ -1548,6 +1561,13 @@ func (c *Client) GetDividends(symbol string) ([]models.Dividend, error) {
 // GetSplits returns the merged past+future split calendar for a symbol, sorted
 // ascending by date with IsFuture flags.
 func (c *Client) GetSplits(symbol string) ([]models.Split, error) {
+	return calendarCached(c, "splits", symbol, func() ([]models.Split, error) {
+		return c.fetchSplits(symbol)
+	})
+}
+
+// fetchSplits performs the two uncached calls behind GetSplits.
+func (c *Client) fetchSplits(symbol string) ([]models.Split, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
@@ -1590,6 +1610,13 @@ func (c *Client) GetSplits(symbol string) ([]models.Split, error) {
 // sorted ascending by date with IsFuture flags. The oneof event details
 // (coupon/amortization/offer) are flattened into the model.
 func (c *Client) GetBondEvents(symbol string) ([]models.BondEvent, error) {
+	return calendarCached(c, "bondEvents", symbol, func() ([]models.BondEvent, error) {
+		return c.fetchBondEvents(symbol)
+	})
+}
+
+// fetchBondEvents performs the two uncached calls behind GetBondEvents.
+func (c *Client) fetchBondEvents(symbol string) ([]models.BondEvent, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
@@ -1642,6 +1669,7 @@ func toProtoDate(t time.Time) *date.Date {
 func mapDividend(d *corporateactions.Dividend, isFuture bool) models.Dividend {
 	return models.Dividend{
 		Date:     formatDate(d.GetDate()),
+		When:     dateValue(d.GetDate()),
 		Amount:   formatDecimalOpt(d.GetAmount()),
 		Currency: d.GetCurrency(),
 		IsFuture: isFuture,
@@ -1662,6 +1690,7 @@ func mapSplit(s *corporateactions.SplitInfo, isFuture bool) models.Split {
 func mapBondEvent(e *corporateactions.BondEvent, isFuture bool) models.BondEvent {
 	be := models.BondEvent{
 		Date:     formatDate(e.GetDate()),
+		When:     dateValue(e.GetDate()),
 		Value:    formatDecimalOpt(e.GetValue()),
 		Currency: e.GetCurrency().GetValue(),
 		IsFuture: isFuture,

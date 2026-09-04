@@ -207,6 +207,10 @@ type Dividend struct {
 	Amount   string // amount per share
 	Currency string
 	IsFuture bool
+
+	// When is the same date as an instant, so the payout screen can sort and
+	// filter without reparsing Date. Zero when the API sent no usable date.
+	When time.Time
 }
 
 // Split represents a single stock split event (past or future) for an equity.
@@ -230,6 +234,9 @@ type BondEvent struct {
 	Value    string // primary value (coupon amount, amortization value, offer price)
 	Currency string
 	IsFuture bool
+
+	// When is Date as an instant; zero when the API sent no usable date.
+	When time.Time
 
 	// Coupon details (Kind == BondEventCoupon)
 	RecordDate string
