@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
+	"finam-terminal/api"
 	"finam-terminal/models"
 
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
@@ -55,6 +57,45 @@ type mockClient struct {
 	// GetQuotesCalls backs the same budget assertions: a redraw of the
 	// Analytics overview must not reach for quotes either.
 	GetQuotesCalls atomic.Int64
+
+	// History. LoadHistoryCalls is the counter the laziness assertions rest
+	// on: one pass per account per session, none on a tick, none on a repeat
+	// visit. LoadHistoryDelay lets a test observe the in-flight state, and
+	// LoadHistoryProgress is replayed to the caller so the progress line can
+	// be exercised without a real walk.
+	LoadHistoryFunc     func(ctx context.Context, req api.HistoryRequest) (*api.HistoryBundle, error)
+	LoadHistoryCalls    atomic.Int64
+	LoadHistoryDelay    time.Duration
+	LoadHistoryProgress []api.HistoryProgress
+
+	// Bars and calendars are counted for the same reason: the benchmark asks
+	// for two narrow windows and the payout screen two calendars per position,
+	// and both promise not to ask again on a repeat visit.
+	GetBarsCalls       atomic.Int64
+	GetDividendsCalls  atomic.Int64
+	GetSplitsCalls     atomic.Int64
+	GetBondEventsCalls atomic.Int64
+}
+
+func (m *mockClient) LoadHistory(ctx context.Context, req api.HistoryRequest, progress func(api.HistoryProgress)) (*api.HistoryBundle, error) {
+	m.LoadHistoryCalls.Add(1)
+
+	if m.LoadHistoryDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(m.LoadHistoryDelay):
+		}
+	}
+	if progress != nil {
+		for _, p := range m.LoadHistoryProgress {
+			progress(p)
+		}
+	}
+	if m.LoadHistoryFunc != nil {
+		return m.LoadHistoryFunc(ctx, req)
+	}
+	return &api.HistoryBundle{Boundary: req.To, Complete: true}, nil
 }
 
 func (m *mockClient) GetAccounts() ([]models.AccountInfo, error) {
@@ -169,6 +210,7 @@ func (m *mockClient) GetActiveOrders(accountID string) ([]models.Order, error) {
 }
 
 func (m *mockClient) GetBars(accountID string, symbol string, timeframe marketdata.TimeFrame, from, to time.Time) ([]models.Bar, error) {
+	m.GetBarsCalls.Add(1)
 	if m.GetBarsFunc != nil {
 		return m.GetBarsFunc(accountID, symbol, timeframe, from, to)
 	}
@@ -197,6 +239,7 @@ func (m *mockClient) GetSchedule(symbol string) ([]models.TradingSession, error)
 }
 
 func (m *mockClient) GetDividends(symbol string) ([]models.Dividend, error) {
+	m.GetDividendsCalls.Add(1)
 	if m.GetDividendsFunc != nil {
 		return m.GetDividendsFunc(symbol)
 	}
@@ -204,6 +247,7 @@ func (m *mockClient) GetDividends(symbol string) ([]models.Dividend, error) {
 }
 
 func (m *mockClient) GetSplits(symbol string) ([]models.Split, error) {
+	m.GetSplitsCalls.Add(1)
 	if m.GetSplitsFunc != nil {
 		return m.GetSplitsFunc(symbol)
 	}
@@ -211,6 +255,7 @@ func (m *mockClient) GetSplits(symbol string) ([]models.Split, error) {
 }
 
 func (m *mockClient) GetBondEvents(symbol string) ([]models.BondEvent, error) {
+	m.GetBondEventsCalls.Add(1)
 	if m.GetBondEventsFunc != nil {
 		return m.GetBondEventsFunc(symbol)
 	}
@@ -247,3 +292,7 @@ func (m *mockClient) CancelOrder(accountID, orderID string) error {
 	}
 	return nil
 }
+
+// mockClient must satisfy the interface the App is given; a compile-time check
+// beats discovering a missing method inside a goroutine at run time.
+var _ APIClient = (*mockClient)(nil)

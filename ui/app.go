@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"finam-terminal/api"
 	"finam-terminal/models"
 
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
@@ -64,10 +66,18 @@ type APIClient interface {
 	GetInstrumentType(symbol string) string
 	GetUsageMetrics() ([]models.QuotaUsage, error)
 
-	// Corporate action calendars
+	// Corporate action calendars. Cached per symbol for a day, so a repeat
+	// lookup inside that window costs no request.
 	GetDividends(symbol string) ([]models.Dividend, error)
 	GetSplits(symbol string) ([]models.Split, error)
 	GetBondEvents(symbol string) ([]models.BondEvent, error)
+
+	// LoadHistory walks an account's trades and transactions backwards in
+	// chunks. It is the most expensive call in the terminal — dozens of
+	// requests for an old account — so it runs once per account per session,
+	// off the event loop, and never on a timer. The context is the
+	// application's, so a shutdown cancels a pass in flight.
+	LoadHistory(ctx context.Context, req api.HistoryRequest, progress func(api.HistoryProgress)) (*api.HistoryBundle, error)
 }
 
 // App represents the TUI application
