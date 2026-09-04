@@ -24,7 +24,7 @@
   - Acceptance: тесты зелёные
 - [x] Task: (Red→Green) `analytics/period.go` (`Preset`: `Range`, `Next`, `Label`; YTD по локальному времени) и `analytics/stats.go` (`Stats` по валютам, `PerInstrument`); тесты границ пресетов, нулевых сделок, профит-фактора «∞»/«Н/Д», лучшей/худшей, оборота; инвариант на случайных последовательностях: стоимость открытых лотов + реализованный результат = сумма денежных потоков по сделкам (3af59b8)
   - Acceptance: тесты зелёные
-- [ ] Task: (Red→Green) `analytics/merge.go`: `MergeTrades`, `MergeTransactions` (дедупликация по id, сортировка); тесты пересечения окон и пустых входов
+- [~] Task: (Red→Green) `analytics/merge.go`: `MergeTrades`, `MergeTransactions` (дедупликация по id, сортировка); тесты пересечения окон и пустых входов
   - Acceptance: тесты зелёные
 
 ## Phase 4: Пакет analytics — деньги, итог с открытия, бенчмарк, выплаты
