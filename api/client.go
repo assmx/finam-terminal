@@ -1160,69 +1160,92 @@ func (c *Client) SearchSecurities(query string) ([]models.SecurityInfo, error) {
 	return results, nil
 }
 
-// GetTradeHistory returns trade history for an account
+// tradeHistoryWindow is the window the History tab shows. The tab is not part
+// of this feature and keeps the behaviour it always had.
+const tradeHistoryWindow = 30 * 24 * time.Hour
+
+// GetTradeHistory returns the last 30 days of trades for the History tab.
 func (c *Client) GetTradeHistory(accountID string) ([]models.Trade, error) {
+	now := time.Now()
+	return c.GetTrades(accountID, now.Add(-tradeHistoryWindow), now, 0)
+}
+
+// GetTrades returns the account's trades in [from, to]. limit is passed through
+// verbatim; 0 leaves the API default.
+//
+// The order of the response is preserved. The reconnaissance could not observe
+// it (no available token carries a trading account), so callers that need a
+// definite order sort for themselves.
+func (c *Client) GetTrades(accountID string, from, to time.Time, limit int32) ([]models.Trade, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
-	now := time.Now()
-	startTime := now.AddDate(0, 0, -30) // Last 30 days
-
 	resp, err := c.accountsClient.Trades(ctx, &accounts.TradesRequest{
 		AccountId: accountID,
+		Limit:     limit,
 		Interval: &interval.Interval{
-			StartTime: timestamppb.New(startTime),
-			EndTime:   timestamppb.New(now),
+			StartTime: timestamppb.New(from),
+			EndTime:   timestamppb.New(to),
 		},
 	})
 	if err != nil {
 		c.logGRPCError("AccountsService", "Trades", err,
 			fmt.Sprintf("AccountId: %s", accountID),
-			fmt.Sprintf("Interval: %s / %s", startTime.Format(time.RFC3339), now.Format(time.RFC3339)))
+			fmt.Sprintf("Interval: %s / %s", from.Format(time.RFC3339), to.Format(time.RFC3339)),
+			fmt.Sprintf("Limit: %d", limit))
 		return nil, fmt.Errorf("failed to get trades: %w", err)
 	}
 
-	var trades []models.Trade
-	for _, t := range resp.Trades {
-		side := "Unknown"
-		switch t.Side {
-		case tradeapiv1.Side_SIDE_BUY:
-			side = "Buy"
-		case tradeapiv1.Side_SIDE_SELL:
-			side = "Sell"
+	trades := make([]models.Trade, 0, len(resp.GetTrades()))
+	for _, t := range resp.GetTrades() {
+		if t == nil {
+			continue
 		}
-
-		priceStr := formatDecimal(t.Price)
-		qtyStr := formatDecimal(t.Size)
-
-		price, _ := strconv.ParseFloat(priceStr, 64)
-		qty, _ := strconv.ParseFloat(qtyStr, 64)
-		total := price * qty
-
-		c.assetMutex.RLock()
-		name := c.instrumentNameCache[t.Symbol]
-		c.assetMutex.RUnlock()
-
-		// Accrued interest is populated only for bonds (2.16.0); nil for other instruments.
-		accruedInterest := ""
-		if t.AccruedInterest != nil && t.AccruedInterest.Value != "" {
-			accruedInterest = t.AccruedInterest.Value
-		}
-
-		trades = append(trades, models.Trade{
-			ID:              t.TradeId,
-			Symbol:          t.Symbol,
-			Name:            name,
-			Side:            side,
-			Price:           priceStr,
-			Quantity:        qtyStr,
-			Total:           fmt.Sprintf("%.2f", total),
-			AccruedInterest: accruedInterest,
-			Currency:        t.Currency,
-			Timestamp:       t.Timestamp.AsTime().Local(),
-		})
+		trades = append(trades, c.mapTrade(t))
 	}
 	return trades, nil
+}
+
+// mapTrade converts one API trade into the model, resolving the instrument
+// name from the cache.
+func (c *Client) mapTrade(t *tradeapiv1.AccountTrade) models.Trade {
+	side := "Unknown"
+	switch t.Side {
+	case tradeapiv1.Side_SIDE_BUY:
+		side = "Buy"
+	case tradeapiv1.Side_SIDE_SELL:
+		side = "Sell"
+	}
+
+	priceStr := formatDecimal(t.Price)
+	qtyStr := formatDecimal(t.Size)
+
+	price, _ := strconv.ParseFloat(priceStr, 64)
+	qty, _ := strconv.ParseFloat(qtyStr, 64)
+	total := price * qty
+
+	c.assetMutex.RLock()
+	name := c.instrumentNameCache[t.Symbol]
+	c.assetMutex.RUnlock()
+
+	// Accrued interest is populated only for bonds (2.16.0); nil for other instruments.
+	accruedInterest := ""
+	if t.AccruedInterest != nil && t.AccruedInterest.Value != "" {
+		accruedInterest = t.AccruedInterest.Value
+	}
+
+	return models.Trade{
+		ID:              t.TradeId,
+		Symbol:          t.Symbol,
+		Name:            name,
+		Side:            side,
+		Price:           priceStr,
+		Quantity:        qtyStr,
+		Total:           fmt.Sprintf("%.2f", total),
+		AccruedInterest: accruedInterest,
+		Currency:        t.Currency,
+		Timestamp:       timestampOrZero(t.Timestamp).Local(),
+	}
 }
 
 // GetTransactions returns the account's money and securities movements in
