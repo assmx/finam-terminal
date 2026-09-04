@@ -313,3 +313,35 @@ type QuotaUsage struct {
 	Remaining int64
 	ResetAt   time.Time
 }
+
+// TransactionTrade is the trade a transaction reflects, when it reflects one.
+//
+// A transaction carrying this is the money side of a deal the Trades method
+// already reports, so cash-flow grouping must keep it out of the totals — the
+// realised result is computed from the trades themselves and would otherwise
+// be counted twice.
+type TransactionTrade struct {
+	Size            float64
+	Price           float64
+	AccruedInterest float64
+}
+
+// Transaction is one row of AccountsService.Transactions: a single movement of
+// money or securities on the account.
+//
+// Category is the name of the TransactionCategory enum value ("DEPOSIT",
+// "COMMISSION", …) rather than the free-text category field, so grouping can
+// switch on a closed set. Amount keeps the sign the API sent — a charge is
+// negative — and ChangeQty carries the securities count, which only a TRANSFER
+// populates.
+type Transaction struct {
+	ID        string
+	Timestamp time.Time
+	Symbol    string
+	Category  string
+	Name      string
+	Amount    float64
+	Currency  string
+	ChangeQty float64
+	Trade     *TransactionTrade
+}

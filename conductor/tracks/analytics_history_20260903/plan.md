@@ -8,7 +8,7 @@
   - Acceptance: spec.md дополнен разделом с фактами; константы и таблица категорий зафиксированы
 
 ## Phase 2: Модели и API-слой
-- [ ] Task: (Red→Green) `models.Transaction`/`TransactionTrade` + `Client.GetTransactions(accountID, from, to, limit)` (маппинг категории по имени enum, `change` в число и валюту, `change_qty`, `trade`, `logGRPCError`) + `MockAccountsServer.Transactions` (фикстура `DefaultTransactions()` со всеми категориями, включая записи со сделкой и иновалютный ввод; учёт `interval`/`limit`; `TransactionsError`; счётчик); юнит-тест маппинга и интеграционные тесты
+- [~] Task: (Red→Green) `models.Transaction`/`TransactionTrade` + `Client.GetTransactions(accountID, from, to, limit)` (маппинг категории по имени enum, `change` в число и валюту, `change_qty`, `trade`, `logGRPCError`) + `MockAccountsServer.Transactions` (фикстура `DefaultTransactions()` со всеми категориями, включая записи со сделкой и иновалютный ввод; учёт `interval`/`limit`; `TransactionsError`; счётчик); юнит-тест маппинга и интеграционные тесты
   - Acceptance: тесты зелёные
 - [ ] Task: (Red→Green) `Client.GetTrades(accountID, from, to, limit)` + `GetTradeHistory` как обёртка (30 дней, `limit` 0); `MockAccountsServer.Trades` учитывает `interval`/`limit` и настраиваемый потолок усечения `TradesLimitCap`; тесты: обёртка даёт прежний результат (существующие тесты History не меняются), фильтр по интервалу, усечение
   - Acceptance: тесты зелёные; тесты вкладки History не изменены

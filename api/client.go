@@ -1225,6 +1225,72 @@ func (c *Client) GetTradeHistory(accountID string) ([]models.Trade, error) {
 	return trades, nil
 }
 
+// GetTransactions returns the account's money and securities movements in
+// [from, to]. limit is passed through verbatim; 0 leaves the API default.
+//
+// The category is taken from the transaction_category enum rather than the
+// free-text category field, so callers can switch on a closed set of names.
+func (c *Client) GetTransactions(accountID string, from, to time.Time, limit int32) ([]models.Transaction, error) {
+	ctx, cancel := c.getContext()
+	defer cancel()
+
+	resp, err := c.accountsClient.Transactions(ctx, &accounts.TransactionsRequest{
+		AccountId: accountID,
+		Limit:     limit,
+		Interval: &interval.Interval{
+			StartTime: timestamppb.New(from),
+			EndTime:   timestamppb.New(to),
+		},
+	})
+	if err != nil {
+		c.logGRPCError("AccountsService", "Transactions", err,
+			fmt.Sprintf("AccountId: %s", accountID),
+			fmt.Sprintf("Interval: %s / %s", from.Format(time.RFC3339), to.Format(time.RFC3339)),
+			fmt.Sprintf("Limit: %d", limit))
+		return nil, fmt.Errorf("failed to get transactions: %w", err)
+	}
+
+	transactions := make([]models.Transaction, 0, len(resp.GetTransactions()))
+	for _, t := range resp.GetTransactions() {
+		if t == nil {
+			continue
+		}
+		transactions = append(transactions, mapTransaction(t))
+	}
+	return transactions, nil
+}
+
+// mapTransaction converts one API transaction into the model.
+//
+// Every field is read nil-safe: the reconnaissance never observed a live
+// transaction (no token carried a trading account), so nothing here assumes
+// the broker populates anything.
+func mapTransaction(t *accounts.Transaction) models.Transaction {
+	tx := models.Transaction{
+		ID:        t.GetId(),
+		Symbol:    t.GetSymbol(),
+		Category:  t.GetTransactionCategory().String(),
+		Name:      t.GetTransactionName(),
+		Timestamp: timestampOrZero(t.GetTimestamp()),
+		ChangeQty: parseDecimalFloat(t.GetChangeQty()),
+	}
+
+	if m := t.GetChange(); m != nil {
+		tx.Amount = moneyAmount(m)
+		tx.Currency = m.GetCurrencyCode()
+	}
+
+	if tr := t.GetTrade(); tr != nil {
+		tx.Trade = &models.TransactionTrade{
+			Size:            parseDecimalFloat(tr.GetSize()),
+			Price:           parseDecimalFloat(tr.GetPrice()),
+			AccruedInterest: parseDecimalFloat(tr.GetAccruedInterest()),
+		}
+	}
+
+	return tx
+}
+
 // GetActiveOrders returns active orders for an account
 func (c *Client) GetActiveOrders(accountID string) ([]models.Order, error) {
 	ctx, cancel := c.getContext()
@@ -1877,7 +1943,7 @@ func mapCashBalances(cash []*money.Money) []models.CashBalance {
 		}
 		balances = append(balances, models.CashBalance{
 			Currency: m.CurrencyCode,
-			Amount:   float64(m.Units) + float64(m.Nanos)/1e9,
+			Amount:   moneyAmount(m),
 		})
 	}
 
@@ -1921,6 +1987,17 @@ func timestampOrZero(ts *timestamppb.Timestamp) time.Time {
 		return time.Time{}
 	}
 	return ts.AsTime()
+}
+
+// moneyAmount converts a google.type.Money into a signed float.
+//
+// Units and nanos carry the same sign, so a charge of -1.50 arrives as
+// {Units: -1, Nanos: -500000000} and simply adds up.
+func moneyAmount(m *money.Money) float64 {
+	if m == nil {
+		return 0
+	}
+	return float64(m.Units) + float64(m.Nanos)/1e9
 }
 
 func parseDecimalFloat(d *decimal.Decimal) float64 {

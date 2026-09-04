@@ -236,7 +236,10 @@ func DefaultOrders(accountID string) []*orders.OrderState {
 
 // DefaultTrades returns trade history entries for testing.
 func DefaultTrades(accountID string) []*tradeapiv1.AccountTrade {
-	t := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	// Anchored a few days back rather than on a fixed date: GetTradeHistory
+	// asks for the last 30 days and the mock honours the interval, so a
+	// hard-coded date would silently age out of the window.
+	t := time.Now().UTC().Add(-5 * 24 * time.Hour)
 	return []*tradeapiv1.AccountTrade{
 		{
 			TradeId:   "TRD001",
@@ -468,5 +471,115 @@ func DefaultConstituents(cursor int64) *assets.GetConstituentsResponse {
 			},
 		},
 		NextCursor: 0,
+	}
+}
+
+// DefaultTransactions returns a transaction fixture covering every category the
+// cash-flow grouping switches on, plus the three shapes that are easy to get
+// wrong: a charge (negative money), a securities transfer (a quantity and no
+// money) and a transaction that reflects a trade (which must stay out of the
+// flow totals so the realised result is not counted twice alongside FIFO).
+//
+// A foreign-currency deposit is included because only base-currency flows enter
+// the since-open figures — the Trade API carries no exchange rates — and the
+// renderer has to say what it left out.
+func DefaultTransactions() []*accounts.Transaction {
+	// Same reasoning as DefaultTrades: anchored relative to now so a window a
+	// test calls "recent" actually contains the fixture.
+	t := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	at := func(d time.Duration) *timestamppb.Timestamp { return timestamppb.New(t.Add(d)) }
+
+	return []*accounts.Transaction{
+		{
+			Id:                  "TX001",
+			TransactionCategory: accounts.Transaction_DEPOSIT,
+			TransactionName:     "Ввод денежных средств",
+			Timestamp:           at(0),
+			Change:              &money.Money{CurrencyCode: "RUB", Units: 100000},
+		},
+		{
+			Id:                  "TX002",
+			TransactionCategory: accounts.Transaction_DEPOSIT,
+			TransactionName:     "Ввод валюты",
+			Timestamp:           at(time.Hour),
+			Change:              &money.Money{CurrencyCode: "USD", Units: 500},
+		},
+		{
+			Id:                  "TX003",
+			TransactionCategory: accounts.Transaction_COMMISSION,
+			TransactionName:     "Комиссия брокера",
+			Timestamp:           at(2 * time.Hour),
+			Symbol:              "SBER@TQBR",
+			Change:              &money.Money{CurrencyCode: "RUB", Units: -1, Nanos: -500000000},
+		},
+		{
+			Id:                  "TX004",
+			TransactionCategory: accounts.Transaction_TAX,
+			TransactionName:     "НДФЛ",
+			Timestamp:           at(3 * time.Hour),
+			Change:              &money.Money{CurrencyCode: "RUB", Units: -250},
+		},
+		{
+			Id:                  "TX005",
+			TransactionCategory: accounts.Transaction_INCOME,
+			TransactionName:     "Дивиденды SBER",
+			Timestamp:           at(4 * time.Hour),
+			Symbol:              "SBER@TQBR",
+			Change:              &money.Money{CurrencyCode: "RUB", Units: 3400, Nanos: 250000000},
+		},
+		{
+			Id:                  "TX006",
+			TransactionCategory: accounts.Transaction_LOAN,
+			TransactionName:     "Проценты по займу",
+			Timestamp:           at(5 * time.Hour),
+			Change:              &money.Money{CurrencyCode: "RUB", Units: -37, Nanos: -800000000},
+		},
+		{
+			Id:                  "TX007",
+			TransactionCategory: accounts.Transaction_FINE,
+			TransactionName:     "Штраф",
+			Timestamp:           at(6 * time.Hour),
+			Change:              &money.Money{CurrencyCode: "RUB", Units: -10},
+		},
+		{
+			Id:                  "TX008",
+			TransactionCategory: accounts.Transaction_TRANSFER,
+			TransactionName:     "Перевод бумаг",
+			Timestamp:           at(7 * time.Hour),
+			Symbol:              "GAZP@TQBR",
+			ChangeQty:           &decimal.Decimal{Value: "-10"},
+		},
+		{
+			Id:                  "TX009",
+			TransactionCategory: accounts.Transaction_WITHDRAW,
+			TransactionName:     "Вывод денежных средств",
+			Timestamp:           at(8 * time.Hour),
+			Change:              &money.Money{CurrencyCode: "RUB", Units: -20000},
+		},
+		{
+			Id:                  "TX010",
+			TransactionCategory: accounts.Transaction_OTHERS,
+			TransactionName:     "Покупка SBER",
+			Timestamp:           at(9 * time.Hour),
+			Symbol:              "SBER@TQBR",
+			Change:              &money.Money{CurrencyCode: "RUB", Units: -2805},
+			Trade: &accounts.Transaction_Trade{
+				Size:  &decimal.Decimal{Value: "10"},
+				Price: &decimal.Decimal{Value: "280.50"},
+			},
+		},
+		{
+			Id:                  "TX011",
+			TransactionCategory: accounts.Transaction_OTHERS,
+			TransactionName:     "Покупка облигации",
+			Timestamp:           at(10 * time.Hour),
+			Symbol:              "SU26238@TQOB",
+			Change:              &money.Money{CurrencyCode: "RUB", Units: -1962, Nanos: -640000000},
+			Trade: &accounts.Transaction_Trade{
+				Size:            &decimal.Decimal{Value: "3"},
+				Price:           &decimal.Decimal{Value: "650.10"},
+				AccruedInterest: &decimal.Decimal{Value: "12.34"},
+			},
+		},
 	}
 }

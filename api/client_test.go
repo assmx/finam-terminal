@@ -88,8 +88,9 @@ func (m *mockAssetsServiceClient) Schedule(ctx context.Context, in *assets.Sched
 // mockAccountsServiceClient is a manual mock for accounts.AccountsServiceClient
 type mockAccountsServiceClient struct {
 	accounts.AccountsServiceClient
-	GetAccountFunc func(ctx context.Context, in *accounts.GetAccountRequest, opts ...grpc.CallOption) (*accounts.GetAccountResponse, error)
-	TradesFunc     func(ctx context.Context, in *accounts.TradesRequest, opts ...grpc.CallOption) (*accounts.TradesResponse, error)
+	GetAccountFunc   func(ctx context.Context, in *accounts.GetAccountRequest, opts ...grpc.CallOption) (*accounts.GetAccountResponse, error)
+	TradesFunc       func(ctx context.Context, in *accounts.TradesRequest, opts ...grpc.CallOption) (*accounts.TradesResponse, error)
+	TransactionsFunc func(ctx context.Context, in *accounts.TransactionsRequest, opts ...grpc.CallOption) (*accounts.TransactionsResponse, error)
 }
 
 func (m *mockAccountsServiceClient) GetAccount(ctx context.Context, in *accounts.GetAccountRequest, opts ...grpc.CallOption) (*accounts.GetAccountResponse, error) {
@@ -98,6 +99,10 @@ func (m *mockAccountsServiceClient) GetAccount(ctx context.Context, in *accounts
 
 func (m *mockAccountsServiceClient) Trades(ctx context.Context, in *accounts.TradesRequest, opts ...grpc.CallOption) (*accounts.TradesResponse, error) {
 	return m.TradesFunc(ctx, in, opts...)
+}
+
+func (m *mockAccountsServiceClient) Transactions(ctx context.Context, in *accounts.TransactionsRequest, opts ...grpc.CallOption) (*accounts.TransactionsResponse, error) {
+	return m.TransactionsFunc(ctx, in, opts...)
 }
 
 // mockAuthServiceClient is a manual mock for auth.AuthServiceClient
