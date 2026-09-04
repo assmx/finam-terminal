@@ -95,7 +95,7 @@ func updateAnalyticsOverview(app *App) {
 	})
 
 	view.Structure.SetText(renderStructure(allocation, sectorsKnown, sectorNote))
-	view.Risk.SetText(renderRisk(account, risk, allocation))
+	view.Risk.SetText(app.renderSinceOpenSummary(account) + renderRisk(account, risk, allocation))
 }
 
 // sectorMapLocked builds the symbol → sector map from the index composition,

@@ -60,6 +60,7 @@ func updateAnalyticsHistoryScreens(a *App) {
 
 	renderTradeStats(a.analyticsView(), data.history, fifo, from, to, currency)
 	renderTradeTable(a.analyticsView().TradesTable, fifo, from, to)
+	renderMoneyScreen(a, account, data, fifo, from, to, currency)
 }
 
 // renderTradeStats writes the headline block.
