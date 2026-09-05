@@ -54,7 +54,7 @@
 ## Phase 7: Документация и верификация
 - [x] Task: Полная авто-проверка — `go build ./...`, `go vet ./...`, `go test ./...`, `go test -tags=integration ./api/...`, `CGO_ENABLED=1 go test -race` обеих сюит (при отсутствии C-компилятора локально — гейт CI), `make lint`, `make coverage` для новых пакетов (1007f56)
   - Acceptance: нет ошибок и предупреждений, линтер чистый, покрытие нового кода ≥ 80%
-- [ ] Task: Документация — `docs/user_manual/analytics.md` (под-экраны, период, формулы FIFO/XIRR/бенчмарка, пометки неполноты, поведение при лимитах), CLAUDE.md (пункты «Account Transactions», «History loader», кеш календарей, новые функции `analytics/`, testserver), `conductor/product.md`, CHANGELOG.md, README.md
+- [~] Task: Документация — `docs/user_manual/analytics.md` (под-экраны, период, формулы FIFO/XIRR/бенчмарка, пометки неполноты, поведение при лимитах), CLAUDE.md (пункты «Account Transactions», «History loader», кеш календарей, новые функции `analytics/`, testserver), `conductor/product.md`, CHANGELOG.md, README.md
   - Acceptance: документация соответствует реализации
 - [ ] Task: (Ручной смоук) Реальный ключ: первый вход на «Сделки» — прогресс и загрузка за один проход, в логе число запросов по чанкам и ни одного `ResourceExhausted`; смена периода мгновенна и без запросов; FIFO сходится с позициями или показывает расхождения; «Деньги» показывают итоги, XIRR и IMOEX; «Выплаты» показывают ожидаемые суммы; `R` догружает хвост, повторный `R` в 10 с — кулдаун; Enter/A из таблиц
   - Acceptance: пользователь подтверждает поведение
