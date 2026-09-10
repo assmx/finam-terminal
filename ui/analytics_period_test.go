@@ -11,7 +11,7 @@ import (
 	"github.com/rivo/tview"
 )
 
-// TestAnalyticsHeader_FinalScreens pins the five sub-screens and their order.
+// TestAnalyticsHeader_FinalScreens pins the four sub-screens and their order.
 func TestAnalyticsHeader_FinalScreens(t *testing.T) {
 	want := []struct {
 		screen AnalyticsScreen
@@ -21,7 +21,6 @@ func TestAnalyticsHeader_FinalScreens(t *testing.T) {
 		{AnalyticsTrades, "Сделки"},
 		{AnalyticsMoney, "Деньги"},
 		{AnalyticsPayouts, "Выплаты"},
-		{AnalyticsQuotas, "API"},
 	}
 
 	if len(analyticsScreens) != len(want) {
@@ -66,13 +65,13 @@ func TestAnalyticsHeader_ShowsPeriod(t *testing.T) {
 	}
 }
 
-// TestAnalyticsKeys_AllFiveDigits reaches every sub-screen by its number.
-func TestAnalyticsKeys_AllFiveDigits(t *testing.T) {
+// TestAnalyticsKeys_AllDigits reaches every sub-screen by its number.
+func TestAnalyticsKeys_AllDigits(t *testing.T) {
 	app, capture := analyticsApp(t, &mockClient{})
 	view := app.portfolioView.TabbedView.Analytics
 
 	for i, want := range []AnalyticsScreen{
-		AnalyticsOverview, AnalyticsTrades, AnalyticsMoney, AnalyticsPayouts, AnalyticsQuotas,
+		AnalyticsOverview, AnalyticsTrades, AnalyticsMoney, AnalyticsPayouts,
 	} {
 		capture(tcell.NewEventKey(tcell.KeyRune, rune('1'+i), tcell.ModNone))
 		if view.ActiveScreen != want {
@@ -80,9 +79,9 @@ func TestAnalyticsKeys_AllFiveDigits(t *testing.T) {
 		}
 	}
 
-	// Six is past the end and must leave the tab where it was.
+	// Five is past the end and must leave the tab where it was.
 	before := view.ActiveScreen
-	capture(tcell.NewEventKey(tcell.KeyRune, '6', tcell.ModNone))
+	capture(tcell.NewEventKey(tcell.KeyRune, '5', tcell.ModNone))
 	if view.ActiveScreen != before {
 		t.Errorf("ActiveScreen = %v after an out-of-range digit, want it unchanged", view.ActiveScreen)
 	}
@@ -131,8 +130,8 @@ func TestAnalyticsKeys_PeriodCostsNoRequests(t *testing.T) {
 	if got := mock.LoadHistoryCalls.Load(); got != before {
 		t.Errorf("LoadHistory called %d times across ten period changes, want %d", got, before)
 	}
-	if got := mock.GetUsageMetricsCalls.Load(); got != 0 {
-		t.Errorf("GetUsageMetrics called %d times from the period key, want 0", got)
+	if got := mock.GetQuotesCalls.Load(); got != 0 {
+		t.Errorf("GetQuotes called %d times from the period key, want 0", got)
 	}
 	_ = app
 }
@@ -168,7 +167,6 @@ func TestAnalyticsFocus_PerScreen(t *testing.T) {
 		{AnalyticsTrades, view.TradesTable},
 		{AnalyticsMoney, view.money},
 		{AnalyticsPayouts, view.PayoutTable},
-		{AnalyticsQuotas, view.QuotaTable},
 	}
 	for _, c := range cases {
 		view.SetScreen(c.screen)
@@ -187,7 +185,7 @@ func TestStatusBar_AnalyticsFinalShortcuts(t *testing.T) {
 	updateStatusBar(app)
 
 	text := app.statusBar.GetText(false)
-	for _, want := range []string{"1-5", "Экран", "P", "Период", "R", "Обновить", "Enter", "Профиль"} {
+	for _, want := range []string{"1-4", "Экран", "P", "Период", "R", "Обновить", "Enter", "Профиль"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("status bar %q does not mention %q", text, want)
 		}

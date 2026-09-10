@@ -15,12 +15,28 @@ func overviewApp(mock *mockClient, account models.AccountInfo) *App {
 	return app
 }
 
+// structureText and riskText read a whole overview column rather than a single
+// panel.
+//
+// The overview is drawn as five panels sized to their content, but which panel
+// a line lands in is a layout decision that may change again; what these tests
+// are about is whether the column says the thing at all. Keeping the helpers
+// column-shaped keeps the assertions at that level.
 func structureText(app *App) string {
-	return app.portfolioView.TabbedView.Analytics.Structure.GetText(false)
+	view := app.portfolioView.TabbedView.Analytics
+	return panelText(view.Structure) + panelText(view.Sectors)
 }
 
 func riskText(app *App) string {
-	return app.portfolioView.TabbedView.Analytics.Risk.GetText(false)
+	view := app.portfolioView.TabbedView.Analytics
+	return panelText(view.Risk) + panelText(view.Concentration) + panelText(view.SinceOpen)
+}
+
+// panelText is a panel's title and body together. The titles carry the section
+// names that used to be headings inside the text, so a test asking whether the
+// column names a block has to look at both.
+func panelText(panel *analyticsPanel) string {
+	return panel.GetTitle() + "\n" + panel.GetText(false) + "\n"
 }
 
 func mcTestAccount() models.AccountInfo {
@@ -309,9 +325,6 @@ func TestOverview_CostsNoRequests(t *testing.T) {
 		updateAnalyticsOverview(app)
 	}
 
-	if got := mock.GetUsageMetricsCalls.Load(); got != 0 {
-		t.Errorf("GetUsageMetrics called %d times during redraws, want 0", got)
-	}
 	if got := mock.GetIndexConstituentsCalls.Load(); got != 0 {
 		t.Errorf("GetIndexConstituents called %d times during redraws, want 0", got)
 	}
@@ -475,30 +488,5 @@ func TestOverviewEntry_LoadsCompositionWithoutSubscribing(t *testing.T) {
 				t.Errorf("the index composition joined the subscription from the Analytics tab: %v", set)
 			}
 		}
-	}
-}
-
-// TestShareBar covers the clamps. A share is normally 0..1, but the bar is the
-// last thing between a bad number and a row that spills across the column, so
-// it defends itself.
-func TestShareBar(t *testing.T) {
-	tests := []struct {
-		name  string
-		share float64
-		want  string
-	}{
-		{"empty", 0, "░░░░░░░░░░"},
-		{"half", 0.5, "█████░░░░░"},
-		{"full", 1, "██████████"},
-		{"over one is clamped", 1.5, "██████████"},
-		{"negative is clamped", -0.3, "░░░░░░░░░░"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shareBar(tt.share); got != tt.want {
-				t.Errorf("shareBar(%v) = %q, want %q", tt.share, got, tt.want)
-			}
-		})
 	}
 }

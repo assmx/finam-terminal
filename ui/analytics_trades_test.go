@@ -65,8 +65,8 @@ func TestTradesScreen_Stats(t *testing.T) {
 	app, _, _ := tradesApp(t, tradesBundle())
 
 	text := app.analyticsView().TradeStats.GetText(true)
-	for _, want := range []string{"Закрытых", "Прибыльных", "Профит-фактор", "Оборот", "RUB"} {
-		if !strings.Contains(text, want) {
+	for _, want := range []string{"закрытых", "прибыльных", "профит-фактор", "оборот", "RUB"} {
+		if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
 			t.Errorf("stats block %q does not mention %q", text, want)
 		}
 	}

@@ -307,3 +307,76 @@ func TestExpectedPayouts_MatchesByTicker(t *testing.T) {
 		t.Errorf("got %d payouts, want the calendar found under the ticker", len(payouts))
 	}
 }
+
+// TestExpectedPayouts_ZeroAmountIsUndetermined covers the shape a floating-rate
+// bond arrives in: the broker gives the coupon a date but reports its value as
+// 0, because the rate for that period is not set yet.
+//
+// Rendering that as 0.00 asserts "you will receive nothing", which is a
+// different claim from "the sum is not known yet" and a wrong one. The payout
+// is listed — the date is real and useful — with no amount, and it stays out of
+// the 30/90 totals, which must only add up money the broker has actually named.
+func TestExpectedPayouts_ZeroAmountIsUndetermined(t *testing.T) {
+	payouts, totals := ExpectedPayouts(
+		[]models.Position{holding("RU000A10BF48@MISX", "RU000A10BF48", "9")},
+		nil,
+		map[string][]models.BondEvent{"RU000A10BF48@MISX": {futureEvent(12, models.BondEventCoupon, "0.0")}},
+		payoutNow,
+	)
+
+	if len(payouts) != 1 {
+		t.Fatalf("got %d payouts, want the coupon listed: %+v", len(payouts), payouts)
+	}
+	p := payouts[0]
+	if p.AmountValid {
+		t.Errorf("a coupon reported as 0 came back with a valid amount: %+v", p)
+	}
+	if len(totals.In30) != 0 || len(totals.In90) != 0 {
+		t.Errorf("an undetermined coupon joined the totals: In30=%v In90=%v", totals.In30, totals.In90)
+	}
+	// It is shown, so it is not something the screen failed to read.
+	if totals.Skipped != 0 {
+		t.Errorf("Skipped = %d, want 0 — the payout is listed, not dropped", totals.Skipped)
+	}
+}
+
+// The same rule for a dividend: a payout of zero is not a payout, it is an
+// unknown one, and the instrument it belongs to does not change that.
+func TestExpectedPayouts_ZeroDividendIsUndetermined(t *testing.T) {
+	payouts, totals := ExpectedPayouts(
+		[]models.Position{holding("SBER@MISX", "SBER", "100")},
+		map[string][]models.Dividend{"SBER@MISX": {futureDividend(20, "0", "RUB")}},
+		nil, payoutNow,
+	)
+
+	if len(payouts) != 1 {
+		t.Fatalf("got %d payouts, want the dividend listed: %+v", len(payouts), payouts)
+	}
+	if payouts[0].AmountValid {
+		t.Errorf("a dividend reported as 0 came back with a valid amount: %+v", payouts[0])
+	}
+	if len(totals.In30) != 0 || len(totals.In90) != 0 {
+		t.Errorf("an undetermined dividend joined the totals: In30=%v In90=%v", totals.In30, totals.In90)
+	}
+	if totals.Skipped != 0 {
+		t.Errorf("Skipped = %d, want 0", totals.Skipped)
+	}
+}
+
+// A real amount is still a real amount — the guard must not swallow the normal
+// case.
+func TestExpectedPayouts_NonZeroAmountStillCounts(t *testing.T) {
+	payouts, totals := ExpectedPayouts(
+		[]models.Position{holding("RU000A10BF48@MISX", "RU000A10BF48", "9")},
+		nil,
+		map[string][]models.BondEvent{"RU000A10BF48@MISX": {futureEvent(12, models.BondEventCoupon, "12.50")}},
+		payoutNow,
+	)
+
+	if len(payouts) != 1 || !payouts[0].AmountValid {
+		t.Fatalf("a coupon with a real value lost its amount: %+v", payouts)
+	}
+	if !approx(totals.In30["RUB"], 112.5) {
+		t.Errorf("In30 = %v, want 12.50 × 9 = 112.5", totals.In30["RUB"])
+	}
+}

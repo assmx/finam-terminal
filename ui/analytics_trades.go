@@ -18,15 +18,24 @@ var tradeColumns = []string{"Тикер", "Название", "Сделок", "�
 
 // tradeColumnExpansion distributes the width left over after the content.
 //
-// The name absorbs nearly all of it because company names are the only
-// genuinely variable-length field; the numeric columns are as wide as their
-// content and no wider.
+// The name absorbs the slack because company names are the only genuinely
+// variable-length field, but not all of it: at an expansion of 6 it swallowed
+// half a wide terminal and pushed every number to the far right, which is the
+// opposite of what a table of figures is for.
 //
 // The expansion is applied to every cell, header and data alike. tview derives
 // a column's width from the rows currently on screen, so expansion living only
 // on the header collapses the table the moment the header scrolls away — the
 // lesson the Index tab paid for.
-var tradeColumnExpansion = []int{1, 6, 1, 2, 1, 1}
+var tradeColumnExpansion = []int{1, 3, 1, 2, 1, 1}
+
+// tradeColumnAlign matches each heading to its data. A right-aligned column of
+// numbers under a left-aligned heading leaves the title stranded at the far
+// side of the column, which is worse than not aligning the numbers at all.
+var tradeColumnAlign = []int{
+	tview.AlignLeft, tview.AlignLeft,
+	tview.AlignRight, tview.AlignRight, tview.AlignRight, tview.AlignRight,
+}
 
 // analyticsWindow is the period the Trades and Money screens are looked at
 // through, resolved against the account's own start.
@@ -59,75 +68,141 @@ func updateAnalyticsHistoryScreens(a *App) {
 	}
 
 	renderTradeStats(a.analyticsView(), data.history, fifo, from, to, currency)
-	renderTradeTable(a.analyticsView().TradesTable, fifo, from, to)
+	a.analyticsView().fitTradesTable(renderTradeTable(a.analyticsView().TradesTable, fifo, from, to))
 	renderMoneyScreen(a, account, data, fifo, from, to, currency)
 }
 
-// renderTradeStats writes the headline block.
+// Detail and tile geometry.
+//
+// Unlike the rows of a breakdown, a headline block does not want the whole
+// width: three figures spread across 120 columns stop being a group and become
+// three unrelated numbers. So these blocks fill the panel only up to a point.
+const (
+	minTradeDetailWidth = 24
+	maxTradeDetailWidth = 44
+	maxKPIColumn        = 30
+)
+
+// renderTradeStats writes the headline block: three figures the eye lands on
+// first, and the detail underneath.
+//
+// It replaces a column of seven "Подпись: значение" pairs. The pairs carried
+// the same information, but finding the result meant reading every label; a
+// row of tiles is read at a glance.
 func renderTradeStats(view *AnalyticsView, bundle *api.HistoryBundle, fifo analytics.FIFOResult, from, to time.Time, currency string) {
 	if bundle == nil {
-		view.TradeStats.SetText("[gray]История ещё не загружена[-]")
+		view.TradeStats.SetStatic(muted("История ещё не загружена"))
 		return
 	}
 
 	stats := analytics.Stats(fifo.Closed, bundle.Trades, from, to, currency)
 	base, hasBase := stats[currency]
 	if !hasBase && len(stats) == 0 {
-		view.TradeStats.SetText("[gray]За выбранный период сделок нет[-]")
+		view.TradeStats.SetStatic(muted("За выбранный период сделок нет"))
 		return
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "[white]Период:[-] %s — %s\n\n",
-		from.Local().Format("02.01.2006"), to.Local().Format("02.01.2006"))
+	view.TradeStats.SetRender(func(width int) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s\n\n", muted(fmt.Sprintf("%s — %s   ·   всего сделок %d, закрытых %d",
+			from.Local().Format("02.01.2006"), to.Local().Format("02.01.2006"),
+			base.RawCount, base.ClosedCount)))
 
-	writeTradeStatsBlock(&b, base)
+		writeTradeStatsBlock(&b, base, width)
 
-	// Currencies other than the account's own get one summary line each: the
-	// Trade API carries no exchange rates, so they can never be added in.
-	for _, other := range sortedCurrencies(stats, currency) {
-		s := stats[other]
-		fmt.Fprintf(&b, "\n[gray]%s: %d сделок, результат %s[-]",
-			other, s.ClosedCount, colouredAmount(s.Total))
-	}
+		// Currencies other than the account's own get one summary line each:
+		// the Trade API carries no exchange rates, so they can never be added
+		// in.
+		for _, other := range sortedCurrencies(stats, currency) {
+			s := stats[other]
+			fmt.Fprintf(&b, "%s\n", muted(fmt.Sprintf("%s: %d сделок, результат %s",
+				other, s.ClosedCount, formatAmount(s.Total))))
+		}
 
-	if unmatched := totalUnmatched(fifo); unmatched > 0 {
-		fmt.Fprintf(&b, "\n[yellow]%s шт. продано без цены входа — результат неполный[-]",
-			formatNumber(unmatched, 0))
-	}
-	if fifo.Skipped > 0 {
-		fmt.Fprintf(&b, "\n[yellow]%d записей не прочитано[-]", fifo.Skipped)
-	}
+		if unmatched := totalUnmatched(fifo); unmatched > 0 {
+			fmt.Fprintf(&b, "[yellow]%s шт. продано без цены входа — результат неполный[-]\n",
+				formatNumber(unmatched, 0))
+		}
+		if fifo.Skipped > 0 {
+			fmt.Fprintf(&b, "[yellow]%d записей не прочитано[-]\n", fifo.Skipped)
+		}
 
-	view.TradeStats.SetText(b.String())
+		return b.String()
+	})
 }
 
-// writeTradeStatsBlock writes the base-currency figures.
-func writeTradeStatsBlock(b *strings.Builder, s analytics.TradeStats) {
-	fmt.Fprintf(b, "[white]Закрытых сделок:[-] %d   [white]всего сделок:[-] %d\n",
-		s.ClosedCount, s.RawCount)
-	fmt.Fprintf(b, "[white]Результат:[-] %s %s\n", colouredAmount(s.Total), s.Currency)
-	fmt.Fprintf(b, "[white]Прибыльных:[-] %s   [white]Профит-фактор:[-] %s\n",
-		formatShareOrNA(s.WinRate, s.WinRateValid), formatProfitFactor(s))
-	fmt.Fprintf(b, "[white]Валовая прибыль:[-] %s   [white]убыток:[-] %s\n",
-		formatAmount(s.GrossProfit), formatAmount(s.GrossLoss))
-	fmt.Fprintf(b, "[white]Средняя прибыльная:[-] %s   [white]убыточная:[-] %s\n",
-		formatAmount(s.AverageWin), formatAmount(s.AverageLoss))
-	fmt.Fprintf(b, "[white]Матожидание:[-] %s   [white]Оборот:[-] %s\n",
-		formatAmount(s.Expectancy), formatAmount(s.Turnover))
-	fmt.Fprintf(b, "[white]Лучшая:[-] %s   [white]Худшая:[-] %s\n",
-		formatBestWorst(s.Best, s.BestValid), formatBestWorst(s.Worst, s.WorstValid))
+// writeTradeStatsBlock writes the base-currency figures: the tile row, then
+// the detail in two aligned columns.
+func writeTradeStatsBlock(b *strings.Builder, s analytics.TradeStats, width int) {
+	// Half the panel each, capped so the two halves stay a pair; and when half
+	// a panel is too little to hold a figure at all, they stack rather than
+	// collide.
+	column := width / 2
+	if column > maxTradeDetailWidth {
+		column = maxTradeDetailWidth
+	}
+	if column < minTradeDetailWidth {
+		column = width
+	}
+
+	tiles := []kpiTile{
+		{
+			Caption: "Результат",
+			Value:   fmt.Sprintf("%s %s", colouredAmount(s.Total), s.Currency),
+		},
+		{
+			Caption: "Прибыльных",
+			Value: fmt.Sprintf("%s %s", formatShareOrNA(s.WinRate, s.WinRateValid),
+				muted(fmt.Sprintf("(%d из %d)", s.Wins, s.ClosedCount))),
+		},
+		{
+			Caption: "Профит-фактор",
+			Value:   formatProfitFactor(s),
+		},
+	}
+
+	tileRow := width
+	if capped := len(tiles) * maxKPIColumn; tileRow > capped {
+		tileRow = capped
+	}
+
+	b.WriteString(kpiRow(tileRow, tiles...))
+	b.WriteString("\n")
+
+	writeTradeDetail(b, column,
+		fmt.Sprintf("[white]Валовая[-] %s / %s", formatAmount(s.GrossProfit), formatAmount(s.GrossLoss)),
+		fmt.Sprintf("[white]Средняя[-] %s / %s", formatAmount(s.AverageWin), formatAmount(s.AverageLoss)))
+	writeTradeDetail(b, column,
+		fmt.Sprintf("[white]Матожидание[-] %s", formatAmount(s.Expectancy)),
+		fmt.Sprintf("[white]Оборот[-] %s", formatAmount(s.Turnover)))
+	writeTradeDetail(b, column,
+		fmt.Sprintf("[white]Лучшая[-] %s", formatBestWorst(s.Best, s.BestValid)),
+		fmt.Sprintf("[white]Худшая[-] %s", formatBestWorst(s.Worst, s.WorstValid)))
 }
 
-// renderTradeTable fills the per-instrument table.
-func renderTradeTable(table *tview.Table, fifo analytics.FIFOResult, from, to time.Time) {
+// writeTradeDetail writes one two-column detail row. A column as wide as the
+// whole panel pushes the right half onto its own line, which is what a panel
+// too narrow for two columns needs.
+func writeTradeDetail(b *strings.Builder, column int, left, right string) {
+	fmt.Fprintf(b, "%s%s\n", padTaggedRight(left, column), right)
+}
+
+// renderTradeTable fills the per-instrument table and reports whether it ended
+// up with any instruments in it.
+func renderTradeTable(table *tview.Table, fifo analytics.FIFOResult, from, to time.Time) bool {
 	table.Clear()
 
-	for col, title := range tradeColumns {
-		table.SetCell(0, col, headerCell(title, tradeColumnExpansion[col]))
+	rows := analytics.PerInstrument(fifo, from, to)
+	if len(rows) == 0 {
+		// No header either: the caller collapses the table, and column titles
+		// over nothing would be the only thing left on the screen.
+		return false
 	}
 
-	rows := analytics.PerInstrument(fifo, from, to)
+	for col, title := range tradeColumns {
+		table.SetCell(0, col, headerCell(title, tradeColumnExpansion[col], tradeColumnAlign[col]))
+	}
+
 	for i, row := range rows {
 		values := []string{
 			tickerOf(row.Symbol),
@@ -142,24 +217,33 @@ func renderTradeTable(table *tview.Table, fifo analytics.FIFOResult, from, to ti
 			cell := tview.NewTableCell(text).
 				SetExpansion(tradeColumnExpansion[col]).
 				SetTextColor(tcell.ColorWhite)
-			if col == 3 {
+			switch col {
+			case 0:
+				// The ticker is the row's identity; the rest is its detail.
+				cell.SetTextColor(tcell.ColorAqua)
+			case 1:
+				cell.SetTextColor(tcell.ColorSilver)
+			case 3:
 				cell.SetTextColor(colour)
 			}
+			// Numbers read as a column only when they end in the same place.
+			cell.SetAlign(tradeColumnAlign[col])
 			table.SetCell(i+1, col, cell)
 		}
 	}
 
-	if len(rows) > 0 {
-		table.Select(1, 0)
-	}
+	table.Select(1, 0)
+	return true
 }
 
-// headerCell builds a non-selectable heading with the column's expansion, so
-// every cell in the column agrees about how the width is shared.
-func headerCell(title string, expansion int) *tview.TableCell {
+// headerCell builds a non-selectable heading with the column's expansion and
+// alignment, so every cell in the column agrees both about how the width is
+// shared and about which edge the content sits against.
+func headerCell(title string, expansion, align int) *tview.TableCell {
 	return tview.NewTableCell(title).
 		SetTextColor(tcell.ColorYellow).
 		SetExpansion(expansion).
+		SetAlign(align).
 		SetSelectable(false)
 }
 

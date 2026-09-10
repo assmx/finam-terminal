@@ -60,11 +60,8 @@ type APIClient interface {
 	GetIndexConstituents(indexSymbol string) ([]models.IndexConstituent, error)
 
 	// Analytics. GetInstrumentType is a pure read of the startup asset cache
-	// and issues no request, so the overview may call it on every tick;
-	// GetUsageMetrics is a real request and is made only on entering the API
-	// sub-screen and on R.
+	// and issues no request, so the overview may call it on every tick.
 	GetInstrumentType(symbol string) string
-	GetUsageMetrics() ([]models.QuotaUsage, error)
 
 	// Corporate action calendars. Cached per symbol for a day, so a repeat
 	// lookup inside that window costs no request.

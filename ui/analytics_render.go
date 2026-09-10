@@ -18,7 +18,6 @@ const (
 	AnalyticsTrades
 	AnalyticsMoney
 	AnalyticsPayouts
-	AnalyticsQuotas
 )
 
 // analyticsScreens is the single source of truth for the sub-screen bar: the
@@ -33,12 +32,37 @@ var analyticsScreens = []struct {
 	{AnalyticsTrades, "Сделки", "trades"},
 	{AnalyticsMoney, "Деньги", "money"},
 	{AnalyticsPayouts, "Выплаты", "payouts"},
-	{AnalyticsQuotas, "API", "quotas"},
 }
 
-// AnalyticsView is the Analytics tab: a sub-screen bar over a Pages stack.
+// Panel height caps. A panel is drawn as tall as the text it holds, and no
+// taller — but a run of sectors or a long list of borrowed currencies must not
+// push the panel below it off the screen, so each one has a ceiling.
+const (
+	maxStructureLines     = 12
+	maxSectorLines        = 12
+	maxSinceOpenLines     = 12
+	maxRiskLines          = 14
+	maxConcentrationLines = 6
+	maxTradeStatsLines    = 12
+	maxPayoutTotalsLines  = 4
+	maxMoneyPanelLines    = 24
+)
+
+const (
+	// minPanelHeight is a border, one row of content, and a border. A panel
+	// that cannot have that much is given nothing: half a frame says less than
+	// no frame and looks like a fault.
+	minPanelHeight = 3
+
+	// minTableHeight is what a stack keeps back for the table under its panel,
+	// so a tall headline block cannot squeeze the table out of existence.
+	minTableHeight = 3
+)
+
+// AnalyticsView is the Analytics tab: a framed area holding a sub-screen tab
+// strip over a Pages stack.
 //
-// Each sub-screen carries its own status line, so a failed quota load cannot
+// Each sub-screen carries its own status line, so a failed history load cannot
 // print an error across the overview, and vice versa.
 type AnalyticsView struct {
 	*tview.Flex
@@ -49,39 +73,39 @@ type AnalyticsView struct {
 	// about the account, not about a screen.
 	Period analytics.Preset
 
-	Header *tview.TextView
+	// Header is the sub-screen tab strip. It is width-aware for the same
+	// reason the panels are: the period is anchored to the right edge.
+	Header *analyticsPanel
 	Pages  *tview.Pages
 
-	// Overview: two columns of text, structure on the left, margin and risk on
-	// the right.
-	Structure      *tview.TextView
-	Risk           *tview.TextView
+	// Overview: two columns of stacked panels. Left is what the portfolio is
+	// made of, right is what it risks and what it has earned.
+	Structure      *analyticsPanel
+	Sectors        *analyticsPanel
+	SinceOpen      *analyticsPanel
+	Risk           *analyticsPanel
+	Concentration  *analyticsPanel
 	OverviewStatus *tview.TextView
 	overview       *tview.Flex
 
-	// Trades: a block of headline figures over a per-instrument table.
-	TradeStats  *tview.TextView
+	// Trades: headline figures over a per-instrument table.
+	TradeStats  *analyticsPanel
 	TradesTable *tview.Table
 	TradeStatus *tview.TextView
-	trades      *tview.Flex
+	trades      *analyticsStack
 
-	// Money: two columns of text, the period on the left and the whole life of
-	// the account on the right.
-	MoneyPeriod    *tview.TextView
-	MoneySinceOpen *tview.TextView
+	// Money: the chosen period on the left, the whole life of the account on
+	// the right.
+	MoneyPeriod    *analyticsPanel
+	MoneySinceOpen *analyticsPanel
 	MoneyStatus    *tview.TextView
 	money          *tview.Flex
 
-	// Payouts: two summary lines over a table by date.
-	PayoutTotals *tview.TextView
+	// Payouts: a compact summary strip over a table by date.
+	PayoutTotals *analyticsPanel
 	PayoutTable  *tview.Table
 	PayoutStatus *tview.TextView
-	payouts      *tview.Flex
-
-	// API quotas.
-	QuotaTable  *tview.Table
-	QuotaStatus *tview.TextView
-	quotas      *tview.Flex
+	payouts      *analyticsStack
 }
 
 // NewAnalyticsView builds the tab.
@@ -89,70 +113,234 @@ func NewAnalyticsView() *AnalyticsView {
 	av := &AnalyticsView{
 		Flex:           tview.NewFlex().SetDirection(tview.FlexRow),
 		Period:         analytics.DefaultPreset,
-		Header:         tview.NewTextView().SetDynamicColors(true),
+		Header:         createAnalyticsBar(),
 		Pages:          tview.NewPages(),
-		Structure:      createAnalyticsColumn(" Структура портфеля "),
-		Risk:           createAnalyticsColumn(" Маржа и риск "),
+		Structure:      createAnalyticsPanel(" Структура портфеля "),
+		Sectors:        createAnalyticsPanel(" Секторы "),
+		SinceOpen:      createAnalyticsPanel(" Итог с открытия "),
+		Risk:           createAnalyticsPanel(" Маржа и риск "),
+		Concentration:  createAnalyticsPanel(" Концентрация "),
 		OverviewStatus: createAnalyticsStatus(),
-		TradeStats:     createAnalyticsColumn(" Сделки за период "),
+		TradeStats:     createAnalyticsPanel(" Сделки за период "),
 		TradesTable:    createAnalyticsTable(" По инструментам "),
 		TradeStatus:    createAnalyticsStatus(),
-		MoneyPeriod:    createAnalyticsColumn(" За период "),
-		MoneySinceOpen: createAnalyticsColumn(" С открытия счёта "),
+		MoneyPeriod:    createAnalyticsPanel(" За период "),
+		MoneySinceOpen: createAnalyticsPanel(" С открытия счёта "),
 		MoneyStatus:    createAnalyticsStatus(),
-		PayoutTotals:   createAnalyticsColumn(" Ожидаемые выплаты "),
+		PayoutTotals:   createAnalyticsPanel(" Ожидаемые выплаты "),
 		PayoutTable:    createAnalyticsTable(" По датам "),
 		PayoutStatus:   createAnalyticsStatus(),
-		QuotaTable:     createQuotaTable(),
-		QuotaStatus:    createAnalyticsStatus(),
 	}
+
+	overviewLeft := newAnalyticsStack().
+		AddPanel(av.Structure, maxStructureLines).
+		AddPanel(av.Sectors, maxSectorLines).
+		AddPanel(av.SinceOpen, maxSinceOpenLines).
+		AddSpacer()
+
+	overviewRight := newAnalyticsStack().
+		AddPanel(av.Risk, maxRiskLines).
+		AddPanel(av.Concentration, maxConcentrationLines).
+		AddSpacer()
 
 	av.overview = tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(av.OverviewStatus, 1, 0, false).
 		AddItem(tview.NewFlex().
-			AddItem(av.Structure, 0, 1, false).
-			AddItem(av.Risk, 0, 1, false), 0, 1, false)
+			AddItem(overviewLeft, 0, 1, false).
+			AddItem(overviewRight, 0, 1, false), 0, 1, false)
 
-	// The statistics block is a fixed height: it always holds the same rows,
-	// and letting it grow would squeeze the table it sits above.
-	av.trades = tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(av.TradeStatus, 1, 0, false).
-		AddItem(av.TradeStats, tradeStatsHeight, 0, false).
-		AddItem(av.TradesTable, 0, 1, true)
+	av.trades = newAnalyticsStack().
+		AddFixed(av.TradeStatus, 1).
+		AddPanel(av.TradeStats, maxTradeStatsLines).
+		AddTable(av.TradesTable)
+
+	moneyLeft := newAnalyticsStack().
+		AddPanel(av.MoneyPeriod, maxMoneyPanelLines).
+		AddSpacer()
+
+	moneyRight := newAnalyticsStack().
+		AddPanel(av.MoneySinceOpen, maxMoneyPanelLines).
+		AddSpacer()
 
 	av.money = tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(av.MoneyStatus, 1, 0, false).
 		AddItem(tview.NewFlex().
-			AddItem(av.MoneyPeriod, 0, 1, false).
-			AddItem(av.MoneySinceOpen, 0, 1, false), 0, 1, false)
+			AddItem(moneyLeft, 0, 1, false).
+			AddItem(moneyRight, 0, 1, false), 0, 1, false)
 
-	av.payouts = tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(av.PayoutStatus, 1, 0, false).
-		AddItem(av.PayoutTotals, payoutTotalsHeight, 0, false).
-		AddItem(av.PayoutTable, 0, 1, true)
-
-	av.quotas = tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(av.QuotaStatus, 1, 0, false).
-		AddItem(av.QuotaTable, 0, 1, true)
+	av.payouts = newAnalyticsStack().
+		AddFixed(av.PayoutStatus, 1).
+		AddPanel(av.PayoutTotals, maxPayoutTotalsLines).
+		AddTable(av.PayoutTable)
 
 	av.Pages.AddPage("overview", av.overview, true, true)
 	av.Pages.AddPage("trades", av.trades, true, false)
 	av.Pages.AddPage("money", av.money, true, false)
 	av.Pages.AddPage("payouts", av.payouts, true, false)
-	av.Pages.AddPage("quotas", av.quotas, true, false)
+
+	// The tab as a whole is framed like every other section of the terminal —
+	// same border, same title, and the same double rule when it holds focus.
+	// Without it the sub-screen bar floated at the top-left of the screen with
+	// nothing to belong to, and the panels below started hard against the top
+	// edge of the terminal.
+	av.SetBorder(true)
+	av.SetTitle(" Analytics ")
+	// Centred, unlike the panels inside it: this title names the whole section
+	// rather than labelling the block under it, and centring is what separates
+	// the two roles at a glance.
+	av.SetTitleAlign(tview.AlignCenter)
+	av.SetTitleColor(analyticsTitleColour)
+	av.SetBorderPadding(0, 0, 1, 1)
+	av.SetBackgroundColor(tcell.ColorBlack)
 
 	av.AddItem(av.Header, 1, 0, false)
+	av.AddItem(analyticsRule(), 1, 0, false)
 	av.AddItem(av.Pages, 0, 1, true)
 
-	av.Header.SetBackgroundColor(tcell.ColorBlack)
 	av.updateHeader()
 
 	return av
+}
+
+// analyticsStack is a column that sizes its panels at draw time.
+//
+// The height has to be decided then and not before, because only the draw pass
+// knows how much room the column actually got. Sizing panels ahead of time
+// worked until the sum of their content exceeded the space: the last panel
+// carried on drawing past the bottom of the column and painted over the frame
+// around the tab.
+type analyticsStack struct {
+	*tview.Flex
+
+	panels []stackPanel
+
+	// lead is the height of the fixed rows above the panels — a status line.
+	lead int
+
+	// reserve is what is kept back for the flexible item below them, so a tall
+	// headline block cannot squeeze a table out of existence. It is zero while
+	// that item is collapsed.
+	reserve int
+}
+
+// stackPanel is one panel in a stack and the ceiling on its height.
+type stackPanel struct {
+	panel *analyticsPanel
+	max   int
+}
+
+func newAnalyticsStack() *analyticsStack {
+	return &analyticsStack{Flex: tview.NewFlex().SetDirection(tview.FlexRow)}
+}
+
+// AddFixed adds a row of a known height above the panels.
+func (s *analyticsStack) AddFixed(item tview.Primitive, height int) *analyticsStack {
+	s.AddItem(item, height, 0, false)
+	s.lead += height
+	return s
+}
+
+// AddPanel adds a panel to be sized to its content, up to maxLines.
+func (s *analyticsStack) AddPanel(panel *analyticsPanel, maxLines int) *analyticsStack {
+	s.AddItem(panel, minPanelHeight, 0, false)
+	s.panels = append(s.panels, stackPanel{panel: panel, max: maxLines})
+	return s
+}
+
+// AddSpacer closes the stack with the unframed remainder. A border drawn around
+// empty space reads as a broken panel; the same emptiness with no border round
+// it reads as margin.
+func (s *analyticsStack) AddSpacer() *analyticsStack {
+	s.AddItem(analyticsSpacer(), 0, 1, false)
+	return s
+}
+
+// AddTable closes the stack with a table that takes the rest of the column.
+func (s *analyticsStack) AddTable(table *tview.Table) *analyticsStack {
+	s.AddItem(table, 0, 1, true)
+	s.reserve = minTableHeight
+	return s
+}
+
+// showTable gives the stack's table the rest of the column, or removes it.
+//
+// A bordered table drawn full height with only its column titles in it is a
+// frame around an absence, and it says the screen is broken rather than empty.
+// The block above already carries the explanation, so the table simply goes —
+// and the panels above get back the rows that were held for it.
+func (s *analyticsStack) showTable(table *tview.Table, hasRows bool) {
+	if hasRows {
+		s.reserve = minTableHeight
+		s.ResizeItem(table, 0, 1)
+		return
+	}
+	s.reserve = 0
+	s.ResizeItem(table, 0, 0)
+}
+
+// Draw hands each panel the height its content asks for, as far as the column
+// can pay, and then draws.
+func (s *analyticsStack) Draw(screen tcell.Screen) {
+	_, _, _, height := s.GetInnerRect()
+
+	desired := make([]int, len(s.panels))
+	for i, sp := range s.panels {
+		desired[i] = panelRows(sp.panel, sp.max)
+	}
+
+	for i, granted := range distributeHeights(desired, height-s.lead-s.reserve) {
+		s.ResizeItem(s.panels[i].panel, granted, 0)
+	}
+
+	s.Flex.Draw(screen)
+}
+
+// panelRows is how tall a panel wants to be: its content plus the two border
+// rows, capped.
+func panelRows(panel *analyticsPanel, maxLines int) int {
+	lines := countLines(panel.GetText(true))
+	if lines > maxLines {
+		lines = maxLines
+	}
+	if lines < 1 {
+		lines = 1
+	}
+	return lines + 2
+}
+
+// distributeHeights hands out the column's rows in order, first come first
+// served.
+//
+// The order is priority order — a portfolio's composition matters more than the
+// summary under it — and a panel that cannot be given a frame, a row and a
+// frame is given nothing at all rather than a stump.
+func distributeHeights(desired []int, available int) []int {
+	granted := make([]int, len(desired))
+
+	left := available
+	for i, want := range desired {
+		if left < minPanelHeight {
+			break
+		}
+		if want > left {
+			want = left
+		}
+		granted[i] = want
+		left -= want
+	}
+	return granted
+}
+
+// countLines is how many rows a block of text occupies. A trailing newline is
+// not a row of its own.
+func countLines(text string) int {
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return 1
+	}
+	return strings.Count(text, "\n") + 1
 }
 
 // SetScreen switches the sub-screen and repaints the bar.
@@ -178,8 +366,6 @@ func (av *AnalyticsView) Focusable() tview.Primitive {
 		return av.money
 	case AnalyticsPayouts:
 		return av.PayoutTable
-	case AnalyticsQuotas:
-		return av.QuotaTable
 	default:
 		return av.overview
 	}
@@ -193,33 +379,109 @@ func (av *AnalyticsView) SetPeriod(period analytics.Preset) {
 	av.updateHeader()
 }
 
-// updateHeader draws the sub-screen bar, highlighting the active screen the
-// same way the tab bar above it does.
+// fitTradesTable and fitPayoutTable collapse their table when it has nothing
+// to show.
+func (av *AnalyticsView) fitTradesTable(hasRows bool) {
+	av.trades.showTable(av.TradesTable, hasRows)
+}
+
+func (av *AnalyticsView) fitPayoutTable(hasRows bool) {
+	av.payouts.showTable(av.PayoutTable, hasRows)
+}
+
+// updateHeader draws the sub-screen tab strip.
 func (av *AnalyticsView) updateHeader() {
+	active, period := av.ActiveScreen, av.Period
+	av.Header.SetRender(func(width int) string { return renderSubTabs(active, period, width) })
+}
+
+// renderSubTabs lays the tabs out along the strip with the period against the
+// right edge.
+//
+// The labels are padded inside their highlight and separated by a dim rule:
+// with the yellow background butted straight against the next label the blocks
+// merged into one another. The period is anchored to the far edge rather than
+// to a fixed column, so it neither drifts into the middle of a wide terminal
+// nor collides with the tabs on a narrow one.
+func renderSubTabs(active AnalyticsScreen, period analytics.Preset, width int) string {
 	var b strings.Builder
 	for i, s := range analyticsScreens {
 		if i > 0 {
-			b.WriteString("  ")
+			fmt.Fprintf(&b, "[%s]│[-]", analyticsMutedTag)
 		}
-		label := fmt.Sprintf("[%d] %s", i+1, s.Label)
-		if s.Screen == av.ActiveScreen {
-			fmt.Fprintf(&b, "[black:yellow]%s[-]", label)
+		label := fmt.Sprintf(" %d %s ", i+1, s.Label)
+		if s.Screen == active {
+			fmt.Fprintf(&b, "[black:yellow::b]%s[-:-:-]", label)
 		} else {
-			fmt.Fprintf(&b, "[white:black]%s[-]", label)
+			fmt.Fprintf(&b, "[white:black]%s[-:-]", label)
 		}
 	}
-	fmt.Fprintf(&b, "        [white:black]Период:[-] [yellow]%s[-]", av.Period.Label())
-	av.Header.SetText(b.String())
+
+	tabs := b.String()
+	label := fmt.Sprintf("[white]Период[-] [yellow::b]%s[-:-:-]", period.Label())
+
+	gap := width - tview.TaggedStringWidth(tabs) - tview.TaggedStringWidth(label)
+	if gap < 3 {
+		gap = 3
+	}
+	return tabs + strings.Repeat(" ", gap) + label
 }
 
-// createAnalyticsColumn builds one column of the overview.
-func createAnalyticsColumn(title string) *tview.TextView {
+// createAnalyticsBar builds the tab strip: a borderless, width-aware line.
+func createAnalyticsBar() *analyticsPanel {
 	view := tview.NewTextView()
 	view.SetDynamicColors(true)
+	view.SetWrap(false)
+	view.SetBackgroundColor(tcell.ColorBlack)
+	return &analyticsPanel{TextView: view}
+}
+
+// analyticsRule is the horizontal line under the tab strip, separating the
+// tabs from the sub-screen they select. It is drawn rather than typed because
+// only the draw pass knows how wide the frame is.
+func analyticsRule() *tview.Box {
+	box := tview.NewBox().SetBackgroundColor(tcell.ColorBlack)
+	box.SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
+		style := tcell.StyleDefault.
+			Background(tcell.ColorBlack).
+			Foreground(analyticsBorderColour)
+		for i := range width {
+			screen.SetContent(x+i, y, tview.Borders.Horizontal, nil, style)
+		}
+		return x, y, width, height
+	})
+	return box
+}
+
+// createAnalyticsPanel builds one bordered panel of a sub-screen.
+//
+// The border is dimmer than the numbers inside it and the title carries the
+// accent colour, so the frame stays furniture and the content stays the point.
+// The one column of padding on each side keeps text off the border.
+func createAnalyticsPanel(title string) *analyticsPanel {
+	view := tview.NewTextView()
+	view.SetDynamicColors(true)
+	// No wrapping. These panels hold rows of aligned figures, and a row too
+	// wide for a narrow terminal reads far better cut off at the edge than
+	// folded onto a second line, where it destroys the column it belongs to.
+	// It also keeps panelRows honest: countLines counts logical lines, so a
+	// wrapped row would have occupied two screen rows the height never
+	// accounted for, and the bottom of the panel would be clipped.
+	view.SetWrap(false)
 	view.SetBorder(true)
 	view.SetTitle(title)
+	view.SetTitleAlign(tview.AlignLeft)
+	view.SetTitleColor(analyticsTitleColour)
+	view.SetBorderColor(analyticsBorderColour)
+	view.SetBorderPadding(0, 0, 1, 1)
 	view.SetBackgroundColor(tcell.ColorBlack)
-	return view
+	return &analyticsPanel{TextView: view}
+}
+
+// analyticsSpacer is the unframed remainder at the bottom of a column. It is
+// what lets every panel above it be exactly as tall as its content.
+func analyticsSpacer() *tview.Box {
+	return tview.NewBox().SetBackgroundColor(tcell.ColorBlack)
 }
 
 // createAnalyticsStatus builds a one-line status strip: loading in yellow,
@@ -231,35 +493,16 @@ func createAnalyticsStatus() *tview.TextView {
 	return view
 }
 
-// createQuotaTable builds the API quota table.
-func createQuotaTable() *tview.Table {
-	table := tview.NewTable()
-	table.SetBorder(true)
-	table.SetTitle(" Квоты Trade API ")
-	table.SetBackgroundColor(tcell.ColorBlack)
-	table.SetSelectable(true, false)
-	table.SetSelectedStyle(tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack))
-	// The real answer carries 39 rows, which scrolls on any normal terminal;
-	// without this the column titles vanish with the first scroll.
-	table.SetFixed(1, 0)
-	return table
-}
-
-// tradeStatsHeight and payoutTotalsHeight are the fixed heights of the text
-// blocks above their tables. Fixed rather than proportional because the content
-// is a known number of lines, and a proportional block would steal room from
-// the table on a short terminal.
-const (
-	tradeStatsHeight   = 11
-	payoutTotalsHeight = 4
-)
-
 // createAnalyticsTable builds a table sub-screen in the shape the Index tab
 // settled on: a pinned header row, so the column titles survive scrolling.
 func createAnalyticsTable(title string) *tview.Table {
 	table := tview.NewTable()
 	table.SetBorder(true)
 	table.SetTitle(title)
+	table.SetTitleAlign(tview.AlignLeft)
+	table.SetTitleColor(analyticsTitleColour)
+	table.SetBorderColor(analyticsBorderColour)
+	table.SetBorderPadding(0, 0, 1, 1)
 	table.SetBackgroundColor(tcell.ColorBlack)
 	table.SetSelectable(true, false)
 	table.SetSelectedStyle(tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack))

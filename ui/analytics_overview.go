@@ -10,11 +10,6 @@ import (
 	"github.com/rivo/tview"
 )
 
-// barWidth is how many cells a share bar occupies. Ten keeps a whole row
-// inside 40 columns, which is what each overview column gets on an 80-column
-// terminal.
-const barWidth = 10
-
 // levelColor maps a risk level to a tview colour tag.
 var levelColor = map[analytics.Level]string{
 	analytics.LevelGood: "green",
@@ -50,21 +45,23 @@ func (a *App) onAnalyticsTab() bool {
 	return a.portfolioView.TabbedView.ActiveTab == TabAnalytics
 }
 
-// updateAnalyticsOverview redraws both overview columns.
+// updateAnalyticsOverview redraws the five overview panels.
 //
 // It reads only state already in memory — positions and quotes from the same
 // five-second tick that feeds the Positions tab, the account's own margin
 // report, the instrument types from the startup asset cache and the sectors
 // from the index composition — and issues no request of its own. That is what
 // makes it safe to call on every tick.
+//
+// What it hands each panel is a function rather than a string: the panel lays
+// its rows out to its own width, which tview only settles while drawing.
 func updateAnalyticsOverview(app *App) {
 	view := app.portfolioView.TabbedView.Analytics
 
 	app.dataMutex.RLock()
 	if app.selectedIdx < 0 || app.selectedIdx >= len(app.accounts) {
 		app.dataMutex.RUnlock()
-		view.Structure.SetText("[gray]Счёт не выбран[-]")
-		view.Risk.SetText("")
+		view.setOverviewStatic(muted("Счёт не выбран"), "", "", "", "")
 		return
 	}
 
@@ -76,8 +73,7 @@ func updateAnalyticsOverview(app *App) {
 
 	if account.LoadError != "" {
 		message := "[red]" + brokerDataError() + "[-]"
-		view.Structure.SetText(message)
-		view.Risk.SetText(message)
+		view.setOverviewStatic(message, "", "", message, "")
 		return
 	}
 
@@ -94,8 +90,36 @@ func updateAnalyticsOverview(app *App) {
 		GrossExposure: allocation.Base - allocation.Cash,
 	})
 
-	view.Structure.SetText(renderStructure(allocation, sectorsKnown, sectorNote))
-	view.Risk.SetText(app.renderSinceOpenSummary(account) + renderRisk(account, risk, allocation))
+	view.setOverview(
+		func(w int) string { return renderStructure(allocation, w) },
+		func(w int) string { return renderSectors(allocation, sectorsKnown, sectorNote, w) },
+		app.sinceOpenSummaryRenderer(account),
+		func(w int) string { return renderRisk(account, risk, allocation, w) },
+		func(w int) string { return renderConcentration(allocation, w) },
+	)
+}
+
+// setOverview installs a renderer in each of the five panels and resizes them
+// to what they now hold, so the frames follow the content rather than the other
+// way round.
+func (av *AnalyticsView) setOverview(structure, sectors, sinceOpen, risk, concentration func(int) string) {
+	av.Structure.SetRender(structure)
+	av.Sectors.SetRender(sectors)
+	av.SinceOpen.SetRender(sinceOpen)
+	av.Risk.SetRender(risk)
+	av.Concentration.SetRender(concentration)
+}
+
+// setOverviewStatic is setOverview for the states with nothing to lay out: no
+// account, or a broker that would not answer.
+func (av *AnalyticsView) setOverviewStatic(structure, sectors, sinceOpen, risk, concentration string) {
+	av.setOverview(
+		func(int) string { return structure },
+		func(int) string { return sectors },
+		func(int) string { return sinceOpen },
+		func(int) string { return risk },
+		func(int) string { return concentration },
+	)
 }
 
 // sectorMapLocked builds the symbol → sector map from the index composition,
@@ -141,141 +165,148 @@ func instrumentTypes(app *App, positions []models.Position) map[string]string {
 	return types
 }
 
-// renderStructure draws the left column: the breakdown by instrument type, the
-// cash line, sectors, and the counters for anything left out.
-func renderStructure(a analytics.Allocation, sectorsKnown bool, sectorNote string) string {
+// renderStructure draws the breakdown by instrument type, the cash line, the
+// total, and the counters for anything left out.
+func renderStructure(a analytics.Allocation, width int) string {
 	var b strings.Builder
 
 	if !a.Valid {
 		b.WriteString(notAvailable + " — в портфеле нет оценённых активов\n")
-	} else {
-		for _, g := range a.Groups {
-			writeShareRow(&b, g.Name, g.Value, g.Share)
-		}
-		if a.Cash > 0 || len(a.Groups) == 0 {
-			writeShareRow(&b, analytics.GroupCash, a.Cash, a.CashShare)
-		}
-		fmt.Fprintf(&b, "\n[white]Итого[-]  %s %s\n", formatNumber(a.Base, 2), a.BaseCurrency)
+		return b.String()
 	}
 
-	b.WriteString("\n[white]Секторы[-]\n")
-	switch {
-	case !sectorsKnown:
-		fmt.Fprintf(&b, "[gray]%s[-]\n", sectorNote)
-	case len(a.Sectors) == 0:
-		b.WriteString("[gray]нет данных по секторам[-]\n")
-	default:
-		for _, s := range a.Sectors {
-			writeShareRow(&b, s.Name, s.Value, s.Share)
-		}
+	for _, g := range a.Groups {
+		fmt.Fprintf(&b, "%s\n", shareRow(g.Name, g.Value, g.Share, width))
+	}
+	if a.Cash > 0 || len(a.Groups) == 0 {
+		fmt.Fprintf(&b, "%s\n", shareRow(analytics.GroupCash, a.Cash, a.CashShare, width))
 	}
 
-	if a.Skipped > 0 || a.ForeignCount > 0 {
-		b.WriteString("\n")
-		if a.Skipped > 0 {
-			fmt.Fprintf(&b, "[yellow]без цены: %d[-]\n", a.Skipped)
-		}
-		if a.ForeignCount > 0 {
-			fmt.Fprintf(&b, "[yellow]в других валютах: %d[-]\n", a.ForeignCount)
-		}
+	fmt.Fprintf(&b, "%s\n", muted(strings.Repeat("─", width)))
+	fmt.Fprintf(&b, "[white::b]%s[-:-:-]\n",
+		totalRow("Итого", formatNumber(a.Base, 0)+" "+a.BaseCurrency, width))
+
+	if a.Skipped > 0 {
+		fmt.Fprintf(&b, "[yellow]без цены: %d[-]\n", a.Skipped)
+	}
+	if a.ForeignCount > 0 {
+		fmt.Fprintf(&b, "[yellow]в других валютах: %d[-]\n", a.ForeignCount)
 	}
 
 	return b.String()
 }
 
-// writeShareRow draws one breakdown row: name, money, share and a bar.
-func writeShareRow(b *strings.Builder, name string, value, share float64) {
-	fmt.Fprintf(b, "%-14s %14s %6s %s\n",
-		tview.Escape(truncate(name, 14)),
-		formatNumber(value, 0),
-		formatPercent(share),
-		shareBar(share))
+// totalRow is a label on the left and its figure hard against the right edge —
+// the shape a sum under a rule wants, with no leader between them.
+func totalRow(label, value string, width int) string {
+	gap := width - tview.TaggedStringWidth(label) - tview.TaggedStringWidth(value)
+	if gap < 1 {
+		return label + " " + value
+	}
+	return label + strings.Repeat(" ", gap) + value
 }
 
-// renderRisk draws the right column: what the account reports, what can be
-// derived from it, and the concentration block.
-func renderRisk(account models.AccountInfo, r analytics.Risk, a analytics.Allocation) string {
-	var b strings.Builder
-
-	if r.EquityValid {
-		fmt.Fprintf(&b, "Эквити            %14s\n", formatNumber(r.Equity, 2))
-	} else {
-		fmt.Fprintf(&b, "Эквити            %14s\n", notAvailable)
+// renderSectors draws the sector breakdown, or says why there is none.
+func renderSectors(a analytics.Allocation, sectorsKnown bool, sectorNote string, width int) string {
+	switch {
+	case !sectorsKnown:
+		return muted(sectorNote)
+	case len(a.Sectors) == 0:
+		return muted("нет данных по секторам")
 	}
 
-	if len(a.Borrowed) > 0 {
-		for _, c := range a.Borrowed {
-			fmt.Fprintf(&b, "[red]заём %-11s %14s[-]\n", tview.Escape(c.Currency), formatNumber(c.Amount, 2))
-		}
+	var b strings.Builder
+	for _, s := range a.Sectors {
+		fmt.Fprintf(&b, "%s\n", shareRow(s.Name, s.Value, s.Share, width))
+	}
+	return b.String()
+}
+
+// renderRisk draws what the account reports about its margin, and the three
+// figures derived from it.
+func renderRisk(account models.AccountInfo, r analytics.Risk, a analytics.Allocation, width int) string {
+	var b strings.Builder
+
+	// Two columns are given up to the level bullets below, so the plain rows
+	// indent to match and every value in the panel ends in the same place.
+	rowWidth := width - 2
+
+	equity := notAvailable
+	if r.EquityValid {
+		equity = fmt.Sprintf("[white::b]%s[-:-:-]", formatNumber(r.Equity, 2))
+	}
+	fmt.Fprintf(&b, "  %s\n", leaderRow("Эквити", equity, rowWidth))
+
+	for _, c := range a.Borrowed {
+		fmt.Fprintf(&b, "  %s\n", leaderRow(
+			fmt.Sprintf("[red]заём %s[-]", tview.Escape(c.Currency)),
+			fmt.Sprintf("[red]%s[-]", formatNumber(c.Amount, 2)),
+			rowWidth))
 	}
 
 	if r.HasMarginData {
-		fmt.Fprintf(&b, "Доступный кэш     %14s\n", formatNumber(account.AvailableCash, 2))
+		fmt.Fprintf(&b, "  %s\n", leaderRow("Доступный кэш", formatNumber(account.AvailableCash, 2), rowWidth))
 		switch r.Kind {
 		case "MC":
-			fmt.Fprintf(&b, "Начальная маржа   %14s\n", formatNumber(account.InitialMargin, 2))
-			fmt.Fprintf(&b, "Мин. маржа        %14s\n", formatNumber(account.MaintenanceMargin, 2))
+			fmt.Fprintf(&b, "  %s\n", leaderRow("Начальная маржа", formatNumber(account.InitialMargin, 2), rowWidth))
+			fmt.Fprintf(&b, "  %s\n", leaderRow("Мин. маржа", formatNumber(account.MaintenanceMargin, 2), rowWidth))
 		case "FORTS":
-			fmt.Fprintf(&b, "Резерв ГО         %14s\n", formatNumber(account.MoneyReserved, 2))
+			fmt.Fprintf(&b, "  %s\n", leaderRow("Резерв ГО", formatNumber(account.MoneyReserved, 2), rowWidth))
 		}
 	}
 
 	b.WriteString("\n")
-	writeMetric(&b, "Использование маржи", r.Utilization, analytics.UtilizationLevel)
-	writeMetric(&b, "Запас до маржин-колла", r.Cushion, analytics.CushionLevel)
-	writeLeverage(&b, r.Leverage)
+	writeMetric(&b, "Использование маржи", r.Utilization, analytics.UtilizationLevel, rowWidth)
+	writeMetric(&b, "Запас до маржин-колла", r.Cushion, analytics.CushionLevel, rowWidth)
+	writeLeverage(&b, r.Leverage, rowWidth)
 
-	b.WriteString("\n[white]Концентрация[-]\n")
+	return b.String()
+}
+
+// renderConcentration draws the largest holdings and how many positions there
+// are in total.
+func renderConcentration(a analytics.Allocation, width int) string {
+	var b strings.Builder
+
 	if len(a.Top) == 0 {
-		b.WriteString("[gray]нет позиций[-]\n")
+		b.WriteString(muted("нет позиций") + "\n")
 	} else {
 		for _, h := range a.Top {
-			fmt.Fprintf(&b, "%-10s %14s %6s\n",
-				tview.Escape(truncate(h.Ticker, 10)),
-				formatNumber(h.Value, 0),
-				formatPercent(h.Share))
+			fmt.Fprintf(&b, "%s\n", shareRow(h.Ticker, h.Value, h.Share, width))
 		}
 	}
-	fmt.Fprintf(&b, "Позиций: %d\n", a.PositionCount)
 
+	fmt.Fprintf(&b, "%s\n", muted(fmt.Sprintf("Позиций: %d", a.PositionCount)))
 	return b.String()
 }
 
 // writeMetric draws one coloured percentage, or Н/Д when the account does not
 // report what it is computed from.
-func writeMetric(b *strings.Builder, label string, m analytics.Metric, level func(float64) analytics.Level) {
+//
+// The level is carried by a bullet as well as by the colour, so the reading
+// survives a monochrome terminal and a red-green colour blindness.
+func writeMetric(b *strings.Builder, label string, m analytics.Metric, level func(float64) analytics.Level, width int) {
 	if !m.Valid {
-		fmt.Fprintf(b, "%-22s %14s\n", label, notAvailable)
+		fmt.Fprintf(b, "  %s\n", leaderRow(label, notAvailable, width))
 		return
 	}
-	fmt.Fprintf(b, "%-22s [%s]%13s[-]\n", label, levelColor[level(m.Value)], formatPercent(m.Value))
+	tag := levelColor[level(m.Value)]
+	fmt.Fprintf(b, "[%s]●[-] %s\n", tag,
+		leaderRow(label, fmt.Sprintf("[%s::b]%s[-:-:-]", tag, formatPercent(m.Value)), width))
 }
 
-// writeLeverage draws the leverage multiple, which carries no colour: unlike
-// margin use, there is no threshold that is right for every strategy.
-func writeLeverage(b *strings.Builder, m analytics.Metric) {
+// writeLeverage draws the leverage multiple, which carries no bullet and no
+// colour: unlike margin use, there is no threshold that is right for every
+// strategy.
+func writeLeverage(b *strings.Builder, m analytics.Metric, width int) {
 	if !m.Valid {
-		fmt.Fprintf(b, "%-22s %14s\n", "Плечо", notAvailable)
+		fmt.Fprintf(b, "  %s\n", leaderRow("Плечо", notAvailable, width))
 		return
 	}
-	fmt.Fprintf(b, "%-22s %13sx\n", "Плечо", fmt.Sprintf("%.2f", m.Value))
+	fmt.Fprintf(b, "  %s\n", leaderRow("Плечо", fmt.Sprintf("%.2fx", m.Value), width))
 }
 
 // formatPercent renders a 0..1 share as a percentage.
 func formatPercent(share float64) string {
 	return fmt.Sprintf("%.1f%%", share*100)
-}
-
-// shareBar draws a proportional bar. A share above 1 (which cannot happen for
-// an allocation but can for a stray metric) is clamped rather than overflowing
-// the row.
-func shareBar(share float64) string {
-	filled := int(share*barWidth + 0.5)
-	if filled < 0 {
-		filled = 0
-	}
-	if filled > barWidth {
-		filled = barWidth
-	}
-	return strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 }

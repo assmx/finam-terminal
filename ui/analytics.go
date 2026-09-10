@@ -1,32 +1,20 @@
 package ui
 
 import (
-	"log"
 	"time"
 
 	"finam-terminal/analytics"
 	"finam-terminal/api"
-	"finam-terminal/models"
 )
 
 // analyticsState is everything the Analytics tab remembers between draws.
 //
-// The quota cache is session-wide rather than per account: the API reports
-// quotas for the token, not for an account, so switching accounts must not
-// throw the answer away and pay for it again. byAccount is the opposite case
-// and is empty in this track — it exists because the second track's
-// sub-screens (trades, cash flows, payouts) are per account, and adding them
-// should extend this struct rather than reshape it.
+// Everything the tab shows is per account and lives in byAccount. The one
+// exception is the period: it describes how the user wants to look, not what
+// they are looking at, so it is chosen once per session and survives switching
+// accounts.
 type analyticsState struct {
-	quotas        []models.QuotaUsage
-	quotasLoaded  bool
-	quotasLoading bool
-	quotasErr     string
-	quotasAt      time.Time
-
-	// period is the window the Trades and Money screens use. One choice per
-	// session rather than per account: it describes how the user wants to
-	// look, not what they are looking at.
+	// period is the window the Trades and Money screens use.
 	period analytics.Preset
 
 	byAccount map[string]*analyticsAccountData
@@ -99,7 +87,8 @@ func (a *App) analyticsView() *AnalyticsView {
 
 // SetAnalyticsScreen switches sub-screen and does whatever entering it
 // requires. Switching itself is free — the overview redraws from memory — and
-// only the API screen's first visit costs a request.
+// only the first visit to a screen backed by history or calendars costs a
+// request.
 func (a *App) SetAnalyticsScreen(screen AnalyticsScreen) {
 	view := a.analyticsView()
 	view.SetScreen(screen)
@@ -115,9 +104,6 @@ func (a *App) SetAnalyticsScreen(screen AnalyticsScreen) {
 	case AnalyticsPayouts:
 		a.ensurePayoutsLoaded()
 		updatePayoutScreen(a)
-	case AnalyticsQuotas:
-		a.ensureQuotasLoaded()
-		updateQuotaTable(a)
 	}
 
 	a.app.SetFocus(view.Focusable())
@@ -142,8 +128,8 @@ func analyticsScreenForDigit(r rune) (AnalyticsScreen, bool) {
 }
 
 // RefreshAnalytics is the R key. Each sub-screen refreshes only its own data,
-// so pressing it on the overview cannot spend the quota request that belongs
-// to the API screen.
+// so pressing it on the overview cannot spend the history pass that belongs to
+// the Trades and Money screens.
 func (a *App) RefreshAnalytics() {
 	switch a.analyticsView().ActiveScreen {
 	case AnalyticsOverview:
@@ -155,78 +141,7 @@ func (a *App) RefreshAnalytics() {
 		a.refreshHistoryTail()
 	case AnalyticsPayouts:
 		a.refreshPayouts()
-	case AnalyticsQuotas:
-		a.loadQuotasAsync()
 	}
-}
-
-// ensureQuotasLoaded fetches the quota table on the first visit only. Later
-// visits reuse the answer: quotas do not move on their own between two glances
-// at the screen, and R is there for when the user wants a fresh one.
-func (a *App) ensureQuotasLoaded() {
-	a.dataMutex.RLock()
-	loaded := a.analytics.quotasLoaded || a.analytics.quotasLoading
-	a.dataMutex.RUnlock()
-
-	if loaded {
-		return
-	}
-	a.loadQuotasAsync()
-}
-
-// loadQuotasAsync fetches the quota table off the event loop.
-//
-// Nothing retries on its own: a failure leaves the error on the sub-screen
-// with the R hint. An automatic retry on a rate-limited call is exactly the
-// wrong reflex.
-func (a *App) loadQuotasAsync() {
-	a.dataMutex.Lock()
-	if a.analytics.quotasLoading {
-		a.dataMutex.Unlock()
-		return
-	}
-	a.analytics.quotasLoading = true
-	a.analytics.quotasErr = ""
-	a.dataMutex.Unlock()
-
-	updateQuotaStatus(a)
-
-	go func() {
-		quotas, err := a.client.GetUsageMetrics()
-
-		a.dataMutex.Lock()
-		a.analytics.quotasLoading = false
-		a.analytics.quotasAt = time.Now()
-		if err != nil {
-			a.analytics.quotasErr = quotaErrorText(err)
-		} else {
-			a.analytics.quotas = quotas
-			a.analytics.quotasLoaded = true
-			a.analytics.quotasErr = ""
-		}
-		a.dataMutex.Unlock()
-
-		if err != nil {
-			log.Printf("[WARN] Failed to load API quotas: %v", err)
-		} else {
-			log.Printf("[INFO] Loaded %d API quotas", len(quotas))
-		}
-
-		a.queueDraw(func() {
-			updateQuotaStatus(a)
-			updateQuotaTable(a)
-		})
-	}()
-}
-
-// quotaErrorText turns a failed load into the line shown on the sub-screen.
-// A rate-limited refusal is named as such: it is the one failure the user can
-// do something about, by waiting.
-func quotaErrorText(err error) string {
-	if api.IsRateLimited(err) {
-		return "лимит API — попробуйте позже, R повторить"
-	}
-	return "не удалось загрузить квоты, R повторить"
 }
 
 // queueDraw marshals a UI update onto the event loop, dropping it once the app

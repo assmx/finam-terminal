@@ -1620,14 +1620,22 @@ func (c *Client) fetchBondEvents(symbol string) ([]models.BondEvent, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
-	from, to := pastYearRange()
 	var result []models.BondEvent
 
+	// No interval. This method — alone among the corporate-action calendars —
+	// refuses a date_to of today with `InvalidArgument: Invalid arguments:date_to`,
+	// which is exactly what pastYearRange() produces, so every bond in a
+	// portfolio failed its calendar and contributed nothing to the payout
+	// forecast. Measured against the live API on 2026-09-09: a date_to of today
+	// is refused at 30 days, six months and a year alike, while the same window
+	// ending yesterday is accepted — and so is a request carrying no interval,
+	// which the proto documents as defaulting to a year and which returned the
+	// identical set of events. Omitting it is therefore the same window with no
+	// boundary to get wrong. The dividend and split calendars accept a date_to
+	// of today and keep using pastYearRange().
 	pastResp, err := c.corporateActionsClient.GetPastBondsEvents(ctx, &corporateactions.GetPastBondsEventsRequest{
 		Symbol:        symbol,
 		SortDirection: corporateactions.SortDirection_DESC,
-		DateFrom:      from,
-		DateTo:        to,
 		Limit:         caCalendarLimit,
 	})
 	if err != nil {

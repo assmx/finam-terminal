@@ -22,8 +22,8 @@ func setupInputHandlers(app *App) {
 			app.pollIndexQuotesAsync(true)
 			return
 		}
-		// Analytics is account-independent for the same reason: the quota
-		// table belongs to the token, and the overview redraws from memory.
+		// Analytics refreshes before the account guard too: each sub-screen
+		// refreshes only its own data, and the overview redraws from memory.
 		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
 			app.RefreshAnalytics()
 			return

@@ -32,6 +32,15 @@ var payoutColumns = []string{"Дата", "Тикер", "Вид", "На бума�
 // once the header scrolls away.
 var payoutColumnExpansion = []int{2, 2, 2, 2, 1, 2, 1}
 
+// payoutColumnAlign matches each heading to its data, for the reason the
+// Trades table documents: a heading stranded at the far side of its own column
+// is worse than an unaligned column.
+var payoutColumnAlign = []int{
+	tview.AlignLeft, tview.AlignLeft, tview.AlignLeft,
+	tview.AlignRight, tview.AlignRight, tview.AlignRight,
+	tview.AlignLeft,
+}
+
 // ensurePayoutsLoaded builds the forecast on the first visit for an account.
 func (a *App) ensurePayoutsLoaded() {
 	account, ok := a.activeAccount()
@@ -175,7 +184,12 @@ func payoutStatusText(missing []string, limited bool, skipped int) string {
 		parts = append(parts, "[yellow]лимит API — список неполный, R повторить[-]")
 	}
 	if len(missing) > 0 {
-		parts = append(parts, fmt.Sprintf("[yellow]нет данных: %s[-]", strings.Join(missing, ", ")))
+		// Named for what is missing, not for what is absent. "нет данных: SBER"
+		// sat above the whole screen and read as "this screen has no data",
+		// which is the opposite of what it says: the rest of the forecast is
+		// there, and one instrument's calendar is not.
+		parts = append(parts, fmt.Sprintf("[yellow]календарь выплат недоступен: %s[-]",
+			strings.Join(missing, ", ")))
 	}
 	if skipped > 0 {
 		parts = append(parts, fmt.Sprintf("[yellow]%d записей без даты или суммы[-]", skipped))
@@ -189,29 +203,65 @@ func updatePayoutScreen(a *App) {
 
 	_, data, ok := a.analyticsAccountSnapshot()
 	if !ok {
-		view.PayoutTotals.SetText("[gray]Счёт не выбран[-]")
+		view.PayoutTotals.SetStatic(muted("Счёт не выбран"))
+		view.fitPayoutTable(false)
 		return
 	}
 
 	view.PayoutStatus.SetText(data.payoutsErr)
-	view.PayoutTotals.SetText(renderPayoutTotals(data))
-	renderPayoutTable(view.PayoutTable, data.payouts)
+	view.PayoutTotals.SetStatic(renderPayoutTotals(data))
+	view.fitPayoutTable(renderPayoutTable(view.PayoutTable, data.payouts))
 }
 
-// renderPayoutTotals writes the two summary lines.
+// renderPayoutTotals writes the summary strip.
+//
+// Both windows sit on one line: they are the same fact measured twice, and
+// stacking them made a three-line block out of a comparison that reads better
+// side by side.
 func renderPayoutTotals(data analyticsAccountData) string {
 	if data.payoutsAt.IsZero() {
-		return "[gray]Загрузка ожидаемых выплат…[-]"
+		return muted("Загрузка ожидаемых выплат…")
 	}
 	if len(data.payouts) == 0 {
-		return "[gray]По текущим позициям ожидаемых выплат нет[-]"
+		return muted("По текущим позициям ожидаемых выплат нет")
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "[white]Ближайшие 30 дней:[-] %s\n", formatCurrencyTotals(data.payoutTotals.In30))
-	fmt.Fprintf(&b, "[white]Ближайшие 90 дней:[-] %s\n", formatCurrencyTotals(data.payoutTotals.In90))
-	b.WriteString("[gray]суммы до налога[-]")
+	fmt.Fprintf(&b, "[white]30 дней[-]  [green::b]%s[-:-:-]     [white]90 дней[-]  [green::b]%s[-:-:-]\n",
+		formatCurrencyTotals(data.payoutTotals.In30),
+		formatCurrencyTotals(data.payoutTotals.In90))
+	b.WriteString(muted("суммы до налога"))
+
+	// A dash in the money column is a question until the panel answers it.
+	if n := undeterminedPayouts(data.payouts); n > 0 {
+		fmt.Fprintf(&b, "\n%s", muted(fmt.Sprintf(
+			"по %d %s сумма не определена — брокер назвал дату, но не сумму", n, pluralPayouts(n))))
+	}
+
 	return b.String()
+}
+
+// undeterminedPayouts counts the rows the broker dated but did not price.
+//
+// An offer is not counted: it is a date by nature — the day the holder may act
+// — rather than a payment whose sum went missing.
+func undeterminedPayouts(payouts []analytics.Payout) int {
+	var n int
+	for _, p := range payouts {
+		if !p.AmountValid && p.Kind != analytics.PayoutOffer {
+			n++
+		}
+	}
+	return n
+}
+
+// pluralPayouts declines «выплата» in the dative for the count. The declension
+// is not decoration: "по 1 выплатам" reads as a defect in the program.
+func pluralPayouts(n int) string {
+	if n%10 == 1 && n%100 != 11 {
+		return "выплате"
+	}
+	return "выплатам"
 }
 
 // formatCurrencyTotals renders a per-currency map as one line, in a stable
@@ -234,12 +284,19 @@ func formatCurrencyTotals(totals map[string]float64) string {
 	return strings.Join(parts, "   ")
 }
 
-// renderPayoutTable fills the table by date.
-func renderPayoutTable(table *tview.Table, payouts []analytics.Payout) {
+// renderPayoutTable fills the table by date and reports whether anything went
+// into it.
+func renderPayoutTable(table *tview.Table, payouts []analytics.Payout) bool {
 	table.Clear()
 
+	if len(payouts) == 0 {
+		// The strip above says there is nothing coming; column titles over an
+		// empty screen would only say it a second time, less clearly.
+		return false
+	}
+
 	for col, title := range payoutColumns {
-		table.SetCell(0, col, headerCell(title, payoutColumnExpansion[col]))
+		table.SetCell(0, col, headerCell(title, payoutColumnExpansion[col], payoutColumnAlign[col]))
 	}
 
 	for i, p := range payouts {
@@ -261,16 +318,25 @@ func renderPayoutTable(table *tview.Table, payouts []analytics.Payout) {
 			cell := tview.NewTableCell(text).
 				SetExpansion(payoutColumnExpansion[col]).
 				SetTextColor(tcell.ColorWhite)
-			if col == 5 && p.AmountValid {
-				cell.SetTextColor(tcell.ColorGreen)
+			switch col {
+			case 0:
+				cell.SetTextColor(tcell.ColorSilver)
+			case 1:
+				// The ticker is the row's identity, as on the Trades table.
+				cell.SetTextColor(tcell.ColorAqua)
+			case 5:
+				if p.AmountValid {
+					cell.SetTextColor(tcell.ColorGreen)
+				}
 			}
+			// The three numeric columns read as columns only right-aligned.
+			cell.SetAlign(payoutColumnAlign[col])
 			table.SetCell(i+1, col, cell)
 		}
 	}
 
-	if len(payouts) > 0 {
-		table.Select(1, 0)
-	}
+	table.Select(1, 0)
+	return true
 }
 
 // payoutPerUnit renders the per-share amount, or a dash for an offer, which

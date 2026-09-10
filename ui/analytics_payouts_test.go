@@ -369,3 +369,52 @@ func TestPayouts_RefreshReloads(t *testing.T) {
 		t.Errorf("GetDividends called %d times after R, want a second pass", mock.GetDividendsCalls.Load())
 	}
 }
+
+// TestPayouts_UndeterminedAmountIsNamed covers the shape a floating-rate bond
+// arrives in: the broker dates the coupon but reports its value as 0, because
+// the rate for that period is not set yet.
+//
+// The row is kept — the date is real and useful — with a dash where the money
+// would be, and the panel says why. A dash on its own is a question; 0.00 was
+// a wrong answer.
+func TestPayouts_UndeterminedAmountIsNamed(t *testing.T) {
+	mock := payoutMock()
+	mock.GetBondEventsFunc = func(string) ([]models.BondEvent, error) {
+		return []models.BondEvent{futureCoupon(12, "0.0")}, nil
+	}
+	mock.GetDividendsFunc = func(string) ([]models.Dividend, error) { return nil, nil }
+
+	app, _ := payoutApp(t, mock, equityAndBond())
+	waitPayouts(t, app)
+
+	table := app.analyticsView().PayoutTable
+	if got := table.GetRowCount(); got != 2 {
+		t.Fatalf("table has %d rows, want a header and the undated-sum coupon", got)
+	}
+	// "На бумагу" and "Сумма" both stand empty rather than claiming zero.
+	for _, col := range []int{3, 5} {
+		if got := table.GetCell(1, col).Text; got != "—" {
+			t.Errorf("column %d = %q, want a dash rather than a sum the broker never named", col, got)
+		}
+	}
+
+	totals := app.analyticsView().PayoutTotals.GetText(true)
+	if !strings.Contains(totals, "сумма не определена") {
+		t.Errorf("totals %q do not explain the missing sums", totals)
+	}
+	if strings.Contains(totals, "0.00") {
+		t.Errorf("totals %q still report a sum of zero", totals)
+	}
+}
+
+func TestPluralPayouts(t *testing.T) {
+	tests := map[int]string{
+		1: "выплате", 2: "выплатам", 4: "выплатам", 5: "выплатам",
+		11: "выплатам", 21: "выплате", 101: "выплате", 111: "выплатам",
+	}
+	for n, want := range tests {
+		if got := pluralPayouts(n); got != want {
+			t.Errorf("pluralPayouts(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

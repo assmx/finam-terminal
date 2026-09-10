@@ -619,7 +619,7 @@ func updateStatusBar(app *App) {
 			shortcuts += " | [yellow]X[white] Cancel [yellow]E[white] Modify [yellow]R[white] Refresh"
 		}
 		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
-			shortcuts += " | [yellow]1-5[white] Экран [yellow]P[white] Период [yellow]R[white] Обновить [yellow]Enter[white] Профиль"
+			shortcuts += " | [yellow]1-4[white] Экран [yellow]P[white] Период [yellow]R[white] Обновить [yellow]Enter[white] Профиль"
 		}
 		// Check if TabbedView.IndexTable is active and focused
 		if app.portfolioView.TabbedView.ActiveTab == TabIndex &&

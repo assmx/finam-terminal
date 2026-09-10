@@ -65,7 +65,7 @@ func TestAnalyticsView_SubScreenHeader(t *testing.T) {
 	view := NewAnalyticsView()
 
 	header := view.Header.GetText(false)
-	for _, want := range []string{"[1] Обзор", "[2] Сделки", "[3] Деньги", "[4] Выплаты", "[5] API"} {
+	for _, want := range []string{" 1 Обзор ", " 2 Сделки ", " 3 Деньги ", " 4 Выплаты "} {
 		if !strings.Contains(header, want) {
 			t.Errorf("sub-screen header %q does not contain %q", header, want)
 		}
@@ -77,19 +77,19 @@ func TestAnalyticsView_SubScreenHeader(t *testing.T) {
 func TestAnalyticsView_HighlightsActiveSubScreen(t *testing.T) {
 	view := NewAnalyticsView()
 
-	view.SetScreen(AnalyticsQuotas)
-	if name, _ := view.Pages.GetFrontPage(); name != "quotas" {
-		t.Errorf("front page = %q, want \"quotas\"", name)
+	view.SetScreen(AnalyticsPayouts)
+	if name, _ := view.Pages.GetFrontPage(); name != "payouts" {
+		t.Errorf("front page = %q, want \"payouts\"", name)
 	}
-	if header := view.Header.GetText(false); !strings.Contains(header, "[black:yellow][5] API[-]") {
-		t.Errorf("header %q does not highlight the API sub-screen", header)
+	if header := view.Header.GetText(false); !strings.Contains(header, "[black:yellow::b] 4 Выплаты ") {
+		t.Errorf("header %q does not highlight the payouts sub-screen", header)
 	}
 
 	view.SetScreen(AnalyticsOverview)
 	if name, _ := view.Pages.GetFrontPage(); name != "overview" {
 		t.Errorf("front page = %q, want \"overview\"", name)
 	}
-	if header := view.Header.GetText(false); !strings.Contains(header, "[black:yellow][1] Обзор[-]") {
+	if header := view.Header.GetText(false); !strings.Contains(header, "[black:yellow::b] 1 Обзор ") {
 		t.Errorf("header %q does not highlight the overview sub-screen", header)
 	}
 }
@@ -110,34 +110,39 @@ func TestAnalyticsView_OverviewHasTwoColumns(t *testing.T) {
 	}
 }
 
-// TestAnalyticsView_QuotaTableHasFixedHeader keeps the column titles on screen
-// once the quota list scrolls — tview drops unfixed rows as they scroll away.
-func TestAnalyticsView_QuotaTableHasFixedHeader(t *testing.T) {
+// TestAnalyticsView_TablesHaveFixedHeader keeps the column titles on screen
+// once a list scrolls — tview drops unfixed rows as they scroll away.
+func TestAnalyticsView_TablesHaveFixedHeader(t *testing.T) {
 	view := NewAnalyticsView()
 
-	if view.QuotaTable == nil {
-		t.Fatal("AnalyticsView.QuotaTable is nil")
-	}
 	// tview exposes no getter for this, and the effect only shows on a table
 	// long enough to scroll, so the field is read directly rather than left
 	// untested.
-	if got := fixedRows(view.QuotaTable); got != 1 {
-		t.Errorf("QuotaTable fixed rows = %d, want 1", got)
+	for name, table := range map[string]*tview.Table{
+		"TradesTable": view.TradesTable,
+		"PayoutTable": view.PayoutTable,
+	} {
+		if table == nil {
+			t.Fatalf("AnalyticsView.%s is nil", name)
+		}
+		if got := fixedRows(table); got != 1 {
+			t.Errorf("%s fixed rows = %d, want 1", name, got)
+		}
 	}
 }
 
 // TestAnalyticsView_StatusLines gives each sub-screen its own status line, so a
-// quota load error cannot appear over the overview.
+// failed history load cannot appear over the overview.
 func TestAnalyticsView_StatusLines(t *testing.T) {
 	view := NewAnalyticsView()
 
 	if view.OverviewStatus == nil {
 		t.Error("AnalyticsView.OverviewStatus is nil")
 	}
-	if view.QuotaStatus == nil {
-		t.Error("AnalyticsView.QuotaStatus is nil")
+	if view.TradeStatus == nil {
+		t.Error("AnalyticsView.TradeStatus is nil")
 	}
-	if view.OverviewStatus == view.QuotaStatus {
+	if view.OverviewStatus == view.TradeStatus {
 		t.Error("the two status lines must be separate views")
 	}
 }
@@ -197,14 +202,14 @@ func TestActiveTabTable_FollowsAnalyticsSubScreen(t *testing.T) {
 
 	tv.SetTab(TabAnalytics)
 
-	tv.Analytics.SetScreen(AnalyticsQuotas)
-	if got := app.activeTabTable(); got != tview.Primitive(tv.Analytics.QuotaTable) {
-		t.Error("on the API sub-screen focus must go to the quota table")
+	tv.Analytics.SetScreen(AnalyticsPayouts)
+	if got := app.activeTabTable(); got != tview.Primitive(tv.Analytics.PayoutTable) {
+		t.Error("on the payouts sub-screen focus must go to the payout table")
 	}
 
 	tv.Analytics.SetScreen(AnalyticsOverview)
-	if got := app.activeTabTable(); got == tview.Primitive(tv.Analytics.QuotaTable) {
-		t.Error("on the overview focus must not stay on the quota table")
+	if got := app.activeTabTable(); got == tview.Primitive(tv.Analytics.PayoutTable) {
+		t.Error("on the overview focus must not stay on the payout table")
 	}
 
 	// The other tabs keep their existing behaviour.

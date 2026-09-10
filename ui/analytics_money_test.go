@@ -251,8 +251,9 @@ func TestOverview_SinceOpenBlock(t *testing.T) {
 	capture(tcell.NewEventKey(tcell.KeyRune, '1', tcell.ModNone))
 	updateAnalyticsOverview(app)
 
-	text := app.analyticsView().Risk.GetText(true)
-	if !strings.Contains(text, "С открытия") {
+	// Title and body together: the block is named by its frame now.
+	text := panelText(app.analyticsView().SinceOpen)
+	if !strings.Contains(text, "с открытия") {
 		t.Errorf("overview %q does not carry the since-open block", text)
 	}
 	if !strings.Contains(text, "120 000") {
@@ -269,7 +270,7 @@ func TestOverview_SinceOpenHintBeforeHistory(t *testing.T) {
 
 	updateAnalyticsOverview(app)
 
-	text := app.analyticsView().Risk.GetText(true)
+	text := app.analyticsView().SinceOpen.GetText(true)
 	if !strings.Contains(text, "Сделки") || !strings.Contains(text, "Деньги") {
 		t.Errorf("overview %q does not point at the screens that load the history", text)
 	}

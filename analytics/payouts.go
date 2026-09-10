@@ -38,8 +38,11 @@ type Payout struct {
 	Quantity float64
 	Currency string
 
-	// Amount is PerUnit × Quantity. AmountValid is false for an offer, which
-	// is a date the holder may act on rather than a payment they will receive.
+	// Amount is PerUnit × Quantity. AmountValid is false in the two cases where
+	// the broker gave a date but no sum: an offer, which is a date the holder
+	// may act on rather than a payment they will receive, and a payout whose
+	// value is reported as zero, which is how a floating-rate coupon arrives
+	// before its rate for the period is set. Neither joins the totals.
 	Amount      float64
 	AmountValid bool
 }
@@ -144,19 +147,35 @@ func dividendPayout(d models.Dividend, p models.Position, qty float64, today tim
 		return Payout{}, false, 1
 	}
 
-	return Payout{
-		Symbol:      p.Symbol,
-		Ticker:      p.Ticker,
-		Name:        p.Name,
-		Kind:        PayoutDividend,
-		Date:        d.Date,
-		When:        d.When,
-		PerUnit:     perUnit,
-		Quantity:    qty,
-		Currency:    d.Currency,
-		Amount:      perUnit * qty,
-		AmountValid: true,
-	}, true, 0
+	payout := Payout{
+		Symbol:   p.Symbol,
+		Ticker:   p.Ticker,
+		Name:     p.Name,
+		Kind:     PayoutDividend,
+		Date:     d.Date,
+		When:     d.When,
+		Quantity: qty,
+		Currency: d.Currency,
+	}
+	applyPerUnit(&payout, perUnit, qty)
+	return payout, true, 0
+}
+
+// applyPerUnit fills in the money side of a payout, unless the broker did not
+// name a sum.
+//
+// A value reported as zero is not a payment of nothing; it is a payment whose
+// size has not been set yet — which is how a floating-rate bond's next coupon
+// arrives, dated but not yet priced. Showing it as 0.00 would assert the
+// opposite of what is known, so the payout keeps its date and goes without an
+// amount, and the 30/90 totals add up only money the broker has actually named.
+func applyPerUnit(payout *Payout, perUnit, qty float64) {
+	if perUnit <= 0 {
+		return
+	}
+	payout.PerUnit = perUnit
+	payout.Amount = perUnit * qty
+	payout.AmountValid = true
 }
 
 // eventPayout does the same for a bond event.
@@ -192,9 +211,9 @@ func eventPayout(e models.BondEvent, p models.Position, qty float64, today time.
 	perUnit, ok := ParseNumber(e.Value)
 	switch {
 	case ok:
-		payout.PerUnit = perUnit
-		payout.Amount = perUnit * qty
-		payout.AmountValid = true
+		// applyPerUnit decides whether the value is a sum at all: a zero is a
+		// coupon that has not been priced yet, not a coupon that pays nothing.
+		applyPerUnit(&payout, perUnit, qty)
 	case kind == PayoutOffer:
 		// Expected: an offer carries a date, not a sum.
 	default:
