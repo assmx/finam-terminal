@@ -191,6 +191,34 @@ type AssetParams struct {
 	TradeLotSize int64
 }
 
+// InstrumentCurrency is what GetAsset says about an instrument's money.
+//
+// Quote is quote_currency: the currency the instrument is priced and settled
+// in. FaceValue is the bond face value its price is a percentage of, and 0 for
+// anything that is not a bond or a bond whose face the broker did not report.
+//
+// There is deliberately no face currency. GetAsset's bond_details.currency is
+// "%" on every bond observed (2026-09-10), the replacement bond with a USD face
+// included: it names the unit of the price, not the currency of the face. The
+// face currency lives only in the bond calendar.
+type InstrumentCurrency struct {
+	Quote     string
+	FaceValue float64
+}
+
+// UnitValue is the value of one piece of an instrument in the currency it
+// settles in, as implied by the margin the broker asks to open a position:
+// long_initial_margin × 100 / long_risk_rate / trade_lot_size.
+//
+// For a bond it is the dirty price — face, accrued interest and, for a bond
+// with a foreign face settled in roubles, the conversion are all already
+// applied. It is fixed at the moment of the GetAssetParams call, so it is a
+// check and a fallback, not a live price.
+type UnitValue struct {
+	Currency string
+	Value    float64
+}
+
 // TradingSession represents a single trading session window
 type TradingSession struct {
 	Type      string

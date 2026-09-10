@@ -62,8 +62,13 @@ type Client struct {
 	tradeLotCache       map[string]float64 // ticker -> trade lot size (GetAssetParams.trade_lot_size); 0 = checked, API has none
 	assetTypeCache      map[string]string  // ticker or symbol -> Asset.Type, from the bulk list
 	instrumentNameCache map[string]string  // ticker or symbol -> human-readable name
-	securityCache       []models.SecurityInfo
-	assetMutex          sync.RWMutex
+	// Money facts filed from answers the terminal already receives: GetAsset
+	// (for the lot and the profile) and GetAssetParams (for the trade lot).
+	// Present means the broker answered, even if it named nothing.
+	instrumentCurrencyCache map[string]models.InstrumentCurrency // ticker or symbol -> quote currency and face value
+	unitValueCache          map[string]models.UnitValue          // ticker or symbol -> value of one piece
+	securityCache           []models.SecurityInfo
+	assetMutex              sync.RWMutex
 
 	// Corporate-action calendars (dividends, splits, bond events), cached per
 	// symbol for calendarCacheTTL. These change on the scale of months, so the
@@ -121,22 +126,24 @@ func NewClient(grpcAddr string, apiToken string) (*Client, error) {
 // and loads the asset cache. Used by NewClient and by tests via bufconn.
 func newClientFromConn(conn *grpc.ClientConn, apiToken string) (*Client, error) {
 	client := &Client{
-		conn:                   conn,
-		authClient:             auth.NewAuthServiceClient(conn),
-		accountsClient:         accounts.NewAccountsServiceClient(conn),
-		marketDataClient:       marketdata.NewMarketDataServiceClient(conn),
-		assetsClient:           assets.NewAssetsServiceClient(conn),
-		ordersClient:           orders.NewOrdersServiceClient(conn),
-		corporateActionsClient: corporateactions.NewCorporateActionsServiceClient(conn),
-		usageMetricsClient:     metrics.NewUsageMetricsServiceClient(conn),
-		apiToken:               apiToken,
-		assetMicCache:          make(map[string]string),
-		assetLotCache:          make(map[string]float64),
-		tradeLotCache:          make(map[string]float64),
-		assetTypeCache:         make(map[string]string),
-		indexCache:             make(map[string]indexCacheEntry),
-		instrumentNameCache:    make(map[string]string),
-		securityCache:          make([]models.SecurityInfo, 0),
+		conn:                    conn,
+		authClient:              auth.NewAuthServiceClient(conn),
+		accountsClient:          accounts.NewAccountsServiceClient(conn),
+		marketDataClient:        marketdata.NewMarketDataServiceClient(conn),
+		assetsClient:            assets.NewAssetsServiceClient(conn),
+		ordersClient:            orders.NewOrdersServiceClient(conn),
+		corporateActionsClient:  corporateactions.NewCorporateActionsServiceClient(conn),
+		usageMetricsClient:      metrics.NewUsageMetricsServiceClient(conn),
+		apiToken:                apiToken,
+		assetMicCache:           make(map[string]string),
+		assetLotCache:           make(map[string]float64),
+		tradeLotCache:           make(map[string]float64),
+		assetTypeCache:          make(map[string]string),
+		instrumentCurrencyCache: make(map[string]models.InstrumentCurrency),
+		unitValueCache:          make(map[string]models.UnitValue),
+		indexCache:              make(map[string]indexCacheEntry),
+		instrumentNameCache:     make(map[string]string),
+		securityCache:           make([]models.SecurityInfo, 0),
 	}
 
 	// Authenticate
@@ -462,6 +469,9 @@ func (c *Client) resolveAssetLot(ticker, fetchSymbol, accountID string) string {
 		return ""
 	}
 
+	// The same answer names the instrument's currency and a bond's face value.
+	c.storeInstrumentCurrency(resp, ticker, fetchSymbol)
+
 	if resp.Ticker == "" || resp.Board == "" {
 		return ""
 	}
@@ -525,6 +535,9 @@ func (c *Client) fetchAssetLotSize(symbol string, accountID string) {
 		return
 	}
 
+	// The same answer names the instrument's currency and a bond's face value.
+	c.storeInstrumentCurrency(resp, symbol)
+
 	if resp.LotSize != nil {
 		lotSizeStr := formatDecimal(resp.LotSize)
 		lotSize, parseErr := strconv.ParseFloat(strings.ReplaceAll(lotSizeStr, ",", "."), 64)
@@ -572,6 +585,8 @@ func (c *Client) fetchTradeLotSize(symbol string, accountID string) {
 	}
 
 	c.storeTradeLotSize(symbol, float64(resp.TradeLotSize))
+	// The margin in the same answer prices one piece of the instrument.
+	c.storeUnitValue(symbol, resp)
 	log.Printf("[DEBUG] Fetched trade lot size for %s: %d", symbol, resp.TradeLotSize)
 }
 
@@ -1834,6 +1849,9 @@ func (c *Client) GetAssetInfo(accountID string, symbol string) (*models.AssetDet
 		return nil, fmt.Errorf("failed to get asset info for %s: %w", fullSymbol, err)
 	}
 
+	// Opening a profile files the currency for free, like a lot resolution.
+	c.storeInstrumentCurrency(resp, symbol, fullSymbol)
+
 	details := &models.AssetDetails{
 		Board:         resp.Board,
 		ID:            resp.Id,
@@ -1892,8 +1910,10 @@ func (c *Client) GetAssetParams(accountID string, symbol string) (*models.AssetP
 		TradeLotSize:  resp.TradeLotSize,
 	}
 
-	// Loading an instrument profile warms the trade lot cache for free.
+	// Loading an instrument profile warms the trade lot and unit value caches
+	// for free.
 	c.storeTradeLotSize(fullSymbol, float64(resp.TradeLotSize))
+	c.storeUnitValue(fullSymbol, resp)
 
 	// IsTradable
 	if resp.IsTradable != nil {

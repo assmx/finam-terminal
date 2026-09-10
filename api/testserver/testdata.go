@@ -274,8 +274,134 @@ func DefaultTrades(accountID string) []*tradeapiv1.AccountTrade {
 	}
 }
 
+// currencyInstrument is one instrument of the currency reconnaissance
+// (2026-09-10): the GetAsset and GetAssetParams answers the real API gave for
+// it, trimmed to the fields the currency layer reads.
+type currencyInstrument struct {
+	info   *assets.GetAssetResponse
+	params *assets.GetAssetParamsResponse
+}
+
+// currencyBond builds the GetAsset answer of a bond as the real API shapes it:
+// the face value, and "%" in the field a reader would expect to hold the face
+// currency — it is the unit of the price, on every bond observed.
+func currencyBond(ticker, board, name, quote, face string) *assets.GetAssetResponse {
+	return &assets.GetAssetResponse{
+		Ticker:        ticker,
+		Board:         board,
+		Mic:           "MISX",
+		Type:          "BONDS",
+		Name:          name,
+		LotSize:       &decimal.Decimal{Value: "1"},
+		Decimals:      4,
+		QuoteCurrency: quote,
+		AssetDetails: &assets.GetAssetResponse_BondDetails_{BondDetails: &assets.GetAssetResponse_BondDetails{
+			BondFaceValue: &decimal.Decimal{Value: face},
+			Currency:      "%",
+		}},
+	}
+}
+
+// currencyParams builds a GetAssetParams answer carrying the long margin pair
+// the per-piece value is derived from (margin × 100 / risk rate / lot).
+func currencyParams(symbol, riskRate, currency string, units int64, nanos int32) *assets.GetAssetParamsResponse {
+	return &assets.GetAssetParamsResponse{
+		Symbol:            symbol,
+		Longable:          &assets.Longable{Value: assets.Longable_AVAILABLE},
+		Shortable:         &assets.Shortable{Value: assets.Shortable_NOT_AVAILABLE},
+		LongRiskRate:      &decimal.Decimal{Value: riskRate},
+		LongInitialMargin: &money.Money{CurrencyCode: currency, Units: units, Nanos: nanos},
+		TradeLotSize:      1,
+	}
+}
+
+// currencyInstruments are the reconnaissance instruments by symbol. Three
+// bonds cover the three shapes the currency layer has to tell apart:
+//
+//   - RU000A10DQA8 «ОФЗ 33 CNY» trades and settles in yuan (board TQOY):
+//     quote_currency CNY, face 10 000, a per-piece value ≈ price × face / 100.
+//   - RU000A10A851 «РФ ЗО 27 Д» is a replacement bond: a 200 000 USD face
+//     settled in roubles, so quote_currency is RUB and the per-piece value is
+//     ~85 times price × face / 100.
+//   - RU000A1087C3 «ГПБ3P6CNY» has a yuan face settled in roubles: the same
+//     mismatch at the yuan rate (~13).
+//
+// YDEX@MISX is an ordinary rouble equity.
+//
+// Each lookup builds fresh messages, so no two calls ever share a proto.
+func lookupCurrencyInstrument(symbol string) (currencyInstrument, bool) {
+	switch symbol {
+	case "RU000A10DQA8@MISX":
+		return currencyInstrument{
+			info:   currencyBond("RU000A10DQA8", "TQOY", "ОФЗ 33 CNY", "CNY", "10000.0"),
+			params: currencyParams(symbol, "25.0", "CNY", 2387, 82500000),
+		}, true
+	case "RU000A10A851@MISX":
+		return currencyInstrument{
+			info:   currencyBond("RU000A10A851", "TQCB", "РФ ЗО 27 Д", "RUB", "200000.0"),
+			params: currencyParams(symbol, "33.0", "RUB", 5489206, 908900000),
+		}, true
+	case "RU000A1087C3@MISX":
+		return currencyInstrument{
+			info:   currencyBond("RU000A1087C3", "TQCB", "ГПБ3P6CNY", "RUB", "100.0"),
+			params: currencyParams(symbol, "100.0", "RUB", 1320, 679159000),
+		}, true
+	case "YDEX@MISX":
+		return currencyInstrument{
+			info: &assets.GetAssetResponse{
+				Ticker:        "YDEX",
+				Board:         "TQBR",
+				Mic:           "MISX",
+				Type:          "EQUITIES",
+				Name:          "ЯНДЕКС",
+				LotSize:       &decimal.Decimal{Value: "1"},
+				Decimals:      1,
+				QuoteCurrency: "RUB",
+			},
+			params: currencyParams(symbol, "15.0", "RUB", 571, 650000000),
+		}, true
+	}
+	return currencyInstrument{}, false
+}
+
+// CurrencyAccountPositions returns a portfolio holding every reconnaissance
+// instrument, for tests that need the currency layer end to end. Bond prices
+// are percentages of face, as the real API sends them.
+func CurrencyAccountPositions() []*accounts.Position {
+	return []*accounts.Position{
+		{
+			Symbol:       "YDEX@MISX",
+			Quantity:     &decimal.Decimal{Value: "9"},
+			AveragePrice: &decimal.Decimal{Value: "4314.8"},
+			CurrentPrice: &decimal.Decimal{Value: "3811.0"},
+		},
+		{
+			Symbol:       "RU000A10DQA8@MISX",
+			Quantity:     &decimal.Decimal{Value: "2"},
+			AveragePrice: &decimal.Decimal{Value: "93.1"},
+			CurrentPrice: &decimal.Decimal{Value: "93.5"},
+		},
+		{
+			Symbol:       "RU000A10A851@MISX",
+			Quantity:     &decimal.Decimal{Value: "1"},
+			AveragePrice: &decimal.Decimal{Value: "96.0"},
+			CurrentPrice: &decimal.Decimal{Value: "97.25"},
+		},
+		{
+			Symbol:       "RU000A1087C3@MISX",
+			Quantity:     &decimal.Decimal{Value: "10"},
+			AveragePrice: &decimal.Decimal{Value: "99.0"},
+			CurrentPrice: &decimal.Decimal{Value: "101.5662"},
+		},
+	}
+}
+
 // DefaultAssetInfo returns a GetAssetResponse for the given symbol.
 func DefaultAssetInfo(symbol string) *assets.GetAssetResponse {
+	if inst, ok := lookupCurrencyInstrument(symbol); ok {
+		return inst.info
+	}
+
 	ticker := symbolTicker(symbol)
 	mic := "TQBR"
 	if i := len(ticker); i < len(symbol) {
@@ -296,6 +422,10 @@ func DefaultAssetInfo(symbol string) *assets.GetAssetResponse {
 // tests can prove that the trade lot (GetAssetParams.trade_lot_size) wins over
 // the asset lot (GetAsset.lot_size) end to end.
 func DefaultAssetParams(symbol string) *assets.GetAssetParamsResponse {
+	if inst, ok := lookupCurrencyInstrument(symbol); ok {
+		return inst.params
+	}
+
 	return &assets.GetAssetParamsResponse{
 		Symbol:       symbol,
 		Longable:     &assets.Longable{Value: assets.Longable_AVAILABLE},
