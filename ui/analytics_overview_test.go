@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"finam-terminal/analytics"
 	"finam-terminal/models"
 )
 
@@ -575,19 +576,19 @@ func TestApplyAccountData_CarriesMarginFields(t *testing.T) {
 // disagree about what a holding is worth.
 func TestPositionValueHelper(t *testing.T) {
 	pos := models.Position{Symbol: "SBER@MISX", Quantity: "100", CurrentPrice: "280"}
+	rouble := analytics.Instrument{Quote: "RUB"}
 
-	withQuote, ok := positionValue(pos, &models.Quote{Last: "285"})
-	if !ok || withQuote != 28500 {
-		t.Errorf("positionValue with a quote = %v (ok=%v), want 28500", withQuote, ok)
+	withQuote := positionValue(pos, &models.Quote{Last: "285"}, rouble, "RUB")
+	if !withQuote.Valid || withQuote.Value != 28500 || withQuote.Currency != "RUB" {
+		t.Errorf("positionValue with a quote = %+v, want 28500 RUB", withQuote)
 	}
 
-	withoutQuote, ok := positionValue(pos, nil)
-	if !ok || withoutQuote != 28000 {
-		t.Errorf("positionValue without a quote = %v (ok=%v), want 28000 from the broker price", withoutQuote, ok)
+	withoutQuote := positionValue(pos, nil, rouble, "RUB")
+	if !withoutQuote.Valid || withoutQuote.Value != 28000 {
+		t.Errorf("positionValue without a quote = %+v, want 28000 from the broker price", withoutQuote)
 	}
 
-	_, ok = positionValue(models.Position{Quantity: "100", CurrentPrice: "N/A"}, nil)
-	if ok {
+	if unpriced := positionValue(models.Position{Quantity: "100", CurrentPrice: "N/A"}, nil, rouble, "RUB"); unpriced.Valid {
 		t.Error("positionValue should report failure when nothing can price the position")
 	}
 }

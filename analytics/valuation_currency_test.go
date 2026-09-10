@@ -184,6 +184,33 @@ func TestValuation_NoInstrumentsIsTheOldBehaviour(t *testing.T) {
 	}
 }
 
+// TestPnLCurrency names the currency a position's own P&L figures are in, by
+// the rule Valuation converts with — so the Positions tab labels exactly what
+// the overview converts.
+func TestPnLCurrency(t *testing.T) {
+	tests := []struct {
+		name string
+		pos  models.Position
+		inst Instrument
+		want string
+	}{
+		{"rouble position", pnlPos("YDEX@MISX", "10", "1000", "1010", "100", "100"), Instrument{Quote: "RUB"}, "RUB"},
+		{"dollar position, dollar figures", pnlPos("AMZN@XNGS", "10", "100", "110", "10", "100"), Instrument{Quote: "USD"}, "USD"},
+		{"dollar position, figures already in roubles", pnlPos("AMZN@XNGS", "10", "100", "110", "420", "8400"), Instrument{Quote: "USD"}, "RUB"},
+		{"no rate: the rule", pnlPos("0700@XHKG", "10", "100", "110", "5", "8400"), Instrument{Quote: "HKD"}, "HKD"},
+		{"unknown currency: the base", pnlPos("X@MISX", "1", "1", "2", "1", "1"), Instrument{}, "RUB"},
+		{"dollar-face bond", pnlPos("RU000A10A851@MISX", "1", "96.0", "97.25", "100", "2500"), withFace(instReplacement, "USD"), "USD"},
+		{"unresolved face: not known", pnlPos("RU000A10A851@MISX", "1", "96.0", "97.25", "100", "2500"), instReplacement, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PnLCurrency(tt.pos, tt.inst, "RUB", testRates); got != tt.want {
+				t.Errorf("PnLCurrency = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestStructure_ExposureIsPositionsOnly: leverage compares the positions with
 // equity, so the exposure leaves every kind of cash out — roubles and bought
 // currency alike.

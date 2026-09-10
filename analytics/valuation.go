@@ -193,6 +193,23 @@ func pnlConversion(p models.Position, inst Instrument, base string, rates map[st
 	return c
 }
 
+// PnLCurrency is the currency a position's own P&L figures (daily_pnl,
+// unrealized_pnl) are in, by the rule Valuation converts them with: the
+// position's value currency, unless the check finds the broker already
+// converted them into the base. It is "" for a bond whose face currency is
+// still being looked up, where the figures' currency cannot be named yet.
+func PnLCurrency(p models.Position, inst Instrument, base string, rates map[string]models.FXRate) string {
+	money := ValuePosition(p, "", inst, base)
+	if money.State == FaceUnresolved {
+		return ""
+	}
+	conv := pnlConversion(p, inst, base, rates)
+	if conv.ok && conv.valueRate != 1 && conv.pnlRate == 1 {
+		return strings.ToUpper(base)
+	}
+	return money.Currency
+}
+
 // pnlAlreadyInBase reports whether a position's unrealised result matches the
 // price formula converted at rate and not the unconverted one. With no price
 // move to compare the two cannot be told apart, and the answer is no.

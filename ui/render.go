@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"finam-terminal/analytics"
 	"finam-terminal/models"
 
 	"github.com/gdamore/tcell/v2"
@@ -112,25 +113,37 @@ func updatePositionsTable(app *App) {
 	}
 
 	app.dataMutex.RLock()
-	accountID := app.accounts[app.selectedIdx].ID
+	account := app.accounts[app.selectedIdx]
+	accountID := account.ID
 	pos := app.positions[accountID]
 	q := app.quotes[accountID]
+	rates := app.fxRatesLocked()
 	app.dataMutex.RUnlock()
+
+	// A money cell in any other currency than the account's says which: a
+	// column never adds up dollars and roubles silently.
+	base := analyticsBaseCurrency(account)
+	instruments := instrumentMoney(app, pos)
 
 	for row, p := range pos {
 		quote := q[p.Symbol]
 		rowNum := row + 1
+		inst := instruments[p.Symbol]
 
 		displayQty := displayLots(p.Quantity, p.LotSize)
 
-		// The same helper the Analytics overview uses, so the two screens
+		// The same valuation the Analytics overview uses, so the two screens
 		// cannot disagree about what a holding is worth. It also falls back to
 		// the broker's own price, which fills this column in for a position
 		// whose quote has not arrived yet instead of leaving it "N/A".
 		totalValue := "N/A"
-		if value, ok := positionValue(p, quote); ok {
-			totalValue = fmt.Sprintf("%.2f", value)
+		if money := positionValue(p, quote, inst, base); money.Valid {
+			totalValue = withCurrency(fmt.Sprintf("%.2f", money.Value), money.Currency, base)
 		}
+
+		// The broker's result figures, in the currency the overview converts
+		// them from.
+		pnlCurrency := analytics.PnLCurrency(p, inst, base, rates)
 
 		dailyPnL := p.DailyPnL
 		dailyColor := tcell.ColorWhite
@@ -142,6 +155,7 @@ func updatePositionsTable(app *App) {
 				} else if val < 0 {
 					dailyColor = tcell.ColorRed
 				}
+				dailyPnL = withCurrency(dailyPnL, pnlCurrency, base)
 			}
 		}
 
@@ -155,6 +169,7 @@ func updatePositionsTable(app *App) {
 				} else if val < 0 {
 					unrealColor = tcell.ColorRed
 				}
+				unrealizedPnL = withCurrency(unrealizedPnL, pnlCurrency, base)
 			}
 		}
 

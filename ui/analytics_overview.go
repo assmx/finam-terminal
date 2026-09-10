@@ -23,20 +23,27 @@ var levelColor = map[analytics.Level]string{
 // zero: "not reported" and "zero roubles" are different facts.
 const notAvailable = "[gray]Н/Д[-]"
 
-// positionValue is the single place a position's market value is computed for
-// display. The Positions tab's Value column and the Analytics overview both go
-// through it, so the two screens cannot disagree about what a holding is
-// worth.
-//
-// The face value stays 0, which keeps the plain price × quantity form. Turning
-// on the percent-of-par formula for bonds is a change here and nowhere else —
-// see analytics.PositionValue.
-func positionValue(pos models.Position, quote *models.Quote) (float64, bool) {
+// positionValue is how the Positions tab values a holding: analytics.
+// ValuePosition, the function the overview's breakdowns value every position
+// with, fed the same cached money facts (instrumentMoney). So the two screens
+// cannot disagree about what a holding is worth, or in which currency — a
+// bond through its face, a replacement bond whose face currency is still
+// being looked up at the broker's per-piece value.
+func positionValue(pos models.Position, quote *models.Quote, inst analytics.Instrument, base string) analytics.PositionMoney {
 	last := ""
 	if quote != nil {
 		last = quote.Last
 	}
-	return analytics.PositionValue(pos.Quantity, last, pos.CurrentPrice, 0)
+	return analytics.ValuePosition(pos, last, inst, base)
+}
+
+// withCurrency appends a currency code to a money cell, unless it is the base
+// currency — or unknown — in which case the column's own unit applies.
+func withCurrency(text, currency, base string) string {
+	if currency == "" || strings.EqualFold(currency, base) {
+		return text
+	}
+	return text + " " + currency
 }
 
 // onAnalyticsTab reports whether the Analytics tab is the one on screen.
@@ -153,6 +160,9 @@ func (av *AnalyticsView) setOverviewStatic(structure, currencies, sectors, since
 // hold the read lock; the copy is what lets the calculation run after it is
 // released.
 func (a *App) fxRatesLocked() map[string]models.FXRate {
+	if a.analytics == nil {
+		return nil
+	}
 	rates := make(map[string]models.FXRate, len(a.analytics.fx.rates))
 	for code, rate := range a.analytics.fx.rates {
 		rates[code] = rate

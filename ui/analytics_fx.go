@@ -246,6 +246,9 @@ func (a *App) redrawOverviewIfShown() {
 // fxStatusLocked is the overview's status line about its currency data. The
 // caller holds the read lock.
 func (a *App) fxStatusLocked() string {
+	if a.analytics == nil {
+		return ""
+	}
 	fx := a.analytics.fx
 	switch {
 	case fx.limited:
