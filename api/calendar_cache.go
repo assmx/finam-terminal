@@ -40,16 +40,8 @@ type calendarCache struct {
 // It is a free function rather than a method because Go methods cannot take
 // type parameters, and the three calendars carry different element types.
 func calendarCached[T any](c *Client, kind, symbol string, load func() ([]T, error)) ([]T, error) {
-	key := kind + "|" + symbol
-
-	c.calendars.mu.Lock()
-	entry, ok := c.calendars.entries[key]
-	c.calendars.mu.Unlock()
-
-	if ok && time.Since(entry.loadedAt) < calendarCacheTTL {
-		if v, sameType := entry.value.([]T); sameType {
-			return v, nil
-		}
+	if v, ok := calendarPeek[T](c, kind, symbol); ok {
+		return v, nil
 	}
 
 	value, err := load()
@@ -61,10 +53,26 @@ func calendarCached[T any](c *Client, kind, symbol string, load func() ([]T, err
 	if c.calendars.entries == nil {
 		c.calendars.entries = make(map[string]calendarCacheEntry)
 	}
-	c.calendars.entries[key] = calendarCacheEntry{value: value, loadedAt: time.Now()}
+	c.calendars.entries[kind+"|"+symbol] = calendarCacheEntry{value: value, loadedAt: time.Now()}
 	c.calendars.mu.Unlock()
 
 	return value, nil
+}
+
+// calendarPeek returns a calendar only if it is already cached and still fresh.
+// It never loads: it is how a caller that must not spend a request — a redraw,
+// or a lookup that a loaded calendar can answer for free — reads what another
+// screen has fetched.
+func calendarPeek[T any](c *Client, kind, symbol string) ([]T, bool) {
+	c.calendars.mu.Lock()
+	entry, ok := c.calendars.entries[kind+"|"+symbol]
+	c.calendars.mu.Unlock()
+
+	if !ok || time.Since(entry.loadedAt) >= calendarCacheTTL {
+		return nil, false
+	}
+	v, sameType := entry.value.([]T)
+	return v, sameType
 }
 
 // dateValue converts a protobuf date into the instant the payout screen sorts

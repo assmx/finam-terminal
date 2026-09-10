@@ -1,12 +1,14 @@
 package api
 
 import (
+	"fmt"
 	"math"
 	"strings"
 
 	"finam-terminal/models"
 
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/assets"
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/corporateactions"
 	"google.golang.org/genproto/googleapis/type/decimal"
 	"google.golang.org/genproto/googleapis/type/money"
 )
@@ -182,6 +184,179 @@ func (c *Client) GetUnitValue(symbol string) (models.UnitValue, bool) {
 		return unit, ok
 	}
 	return models.UnitValue{}, false
+}
+
+// bondEventsCalendar is the calendar-cache kind of the bond-event calendar.
+const bondEventsCalendar = "bondEvents"
+
+// faceCurrencyLookupLimit is how many events a face-currency lookup asks for.
+// One event naming a currency is enough; a few more cover an entry that names
+// none.
+const faceCurrencyLookupLimit = 5
+
+// currencySymbols maps the symbols the bond calendar writes onto ISO codes.
+// These four are the ones the reconnaissance of 2026-09-10 saw. "¥" is the
+// yuan: every bond carrying it was a CNY bond, and MOEX lists no yen bonds.
+var currencySymbols = map[string]string{
+	"₽": "RUB",
+	"$": "USD",
+	"€": "EUR",
+	"¥": "CNY",
+}
+
+// currencyCode turns what a calendar or a price field says about a currency
+// into an ISO code: a known symbol, or three Latin letters in any case. RUR and
+// SUR, the codes older MOEX systems still use for the rouble, become RUB.
+// Anything else — another symbol, a percent sign, a blank — is not a currency
+// this terminal can name.
+func currencyCode(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if code, ok := currencySymbols[s]; ok {
+		return code, true
+	}
+	if len(s) != 3 {
+		return "", false
+	}
+	for _, r := range s {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') {
+			return "", false
+		}
+	}
+	code := strings.ToUpper(s)
+	if code == "RUR" || code == "SUR" {
+		return "RUB", true
+	}
+	return code, true
+}
+
+// faceCurrencyFromEvents returns the first currency a bond calendar names, or
+// "" when it names none this terminal can read.
+func faceCurrencyFromEvents(events []models.BondEvent) string {
+	for _, e := range events {
+		if code, ok := currencyCode(e.Currency); ok {
+			return code
+		}
+	}
+	return ""
+}
+
+// storeFaceCurrency remembers a bond's face currency for the session. A face
+// currency does not change, so unlike the day-long calendar cache nothing
+// expires it.
+func (c *Client) storeFaceCurrency(symbol, code string) {
+	c.assetMutex.Lock()
+	defer c.assetMutex.Unlock()
+
+	if c.faceCurrencyCache == nil {
+		c.faceCurrencyCache = make(map[string]string)
+	}
+	c.faceCurrencyCache[symbol] = code
+}
+
+// BondFaceCurrencyCached returns a bond's face currency if it is already known
+// — looked up earlier this session, or readable from a calendar another screen
+// loaded today — and never issues a request. The second result is false when
+// neither is available; an empty code with true means the calendar was read and
+// named no currency.
+func (c *Client) BondFaceCurrencyCached(symbol string) (string, bool) {
+	if symbol == "" {
+		return "", false
+	}
+
+	c.assetMutex.RLock()
+	code, ok := c.faceCurrencyCache[symbol]
+	c.assetMutex.RUnlock()
+	if ok {
+		return code, true
+	}
+
+	if events, ok := calendarPeek[models.BondEvent](c, bondEventsCalendar, symbol); ok {
+		code := faceCurrencyFromEvents(events)
+		c.storeFaceCurrency(symbol, code)
+		return code, true
+	}
+	return "", false
+}
+
+// GetBondFaceCurrency returns the ISO code of a bond's face currency.
+//
+// The calendar is the only place the API names it. GetAsset's
+// bond_details.currency is "%" on every bond, and quote_currency is the
+// settlement currency, which for a replacement bond is the rouble although its
+// face is in dollars. So the answer comes from, in order: the session cache;
+// the day-long calendar cache, if the payout screen or a profile already
+// loaded this bond; one future-calendar request; and the past calendar only
+// when nothing is scheduled. A calendar that names no currency is an answer
+// ("", nil) and is cached. A failure is not cached, so the next lookup asks
+// again; a rate limit is recognisable with IsRateLimited.
+//
+// The reconnaissance saw a third of calendar calls time out after 30 s, so
+// callers run this off the UI thread and only for the bonds that need it.
+func (c *Client) GetBondFaceCurrency(symbol string) (string, error) {
+	if symbol == "" {
+		return "", nil
+	}
+	if code, ok := c.BondFaceCurrencyCached(symbol); ok {
+		return code, nil
+	}
+
+	events, err := c.futureBondEvents(symbol)
+	if err != nil {
+		return "", err
+	}
+	if len(events) == 0 {
+		// A bond with nothing scheduled still has a history that names it.
+		if events, err = c.pastBondEvents(symbol); err != nil {
+			return "", err
+		}
+	}
+
+	mapped := make([]models.BondEvent, 0, len(events))
+	for _, e := range events {
+		if e != nil {
+			mapped = append(mapped, mapBondEvent(e, false))
+		}
+	}
+	code := faceCurrencyFromEvents(mapped)
+	c.storeFaceCurrency(symbol, code)
+	return code, nil
+}
+
+// futureBondEvents asks for a few of a bond's upcoming events under its own
+// deadline.
+func (c *Client) futureBondEvents(symbol string) ([]*corporateactions.BondEvent, error) {
+	ctx, cancel := c.getContext()
+	defer cancel()
+
+	resp, err := c.corporateActionsClient.GetFutureBondsEvents(ctx, &corporateactions.GetFutureBondsEventsRequest{
+		Symbol:        symbol,
+		SortDirection: corporateactions.SortDirection_ASC,
+		Limit:         faceCurrencyLookupLimit,
+	})
+	if err != nil {
+		c.logGRPCError("CorporateActionsService", "GetFutureBondsEvents", err, fmt.Sprintf("Symbol: %s", symbol))
+		return nil, fmt.Errorf("failed to get future bond events: %w", err)
+	}
+	return resp.GetEvents(), nil
+}
+
+// pastBondEvents asks for a few of a bond's recent events under its own
+// deadline. It sends no interval: this endpoint refuses a date_to of today (see
+// fetchBondEvents).
+func (c *Client) pastBondEvents(symbol string) ([]*corporateactions.BondEvent, error) {
+	ctx, cancel := c.getContext()
+	defer cancel()
+
+	resp, err := c.corporateActionsClient.GetPastBondsEvents(ctx, &corporateactions.GetPastBondsEventsRequest{
+		Symbol:        symbol,
+		SortDirection: corporateactions.SortDirection_DESC,
+		Limit:         faceCurrencyLookupLimit,
+	})
+	if err != nil {
+		c.logGRPCError("CorporateActionsService", "GetPastBondsEvents", err, fmt.Sprintf("Symbol: %s", symbol))
+		return nil, fmt.Errorf("failed to get past bond events: %w", err)
+	}
+	return resp.GetEvents(), nil
 }
 
 // positiveDecimal parses a google Decimal and answers 0 for anything that is

@@ -24,6 +24,12 @@ type MockCorporateActionsServer struct {
 	PastBondEvents   []*corporateactions.BondEvent
 	FutureBondEvents []*corporateactions.BondEvent
 
+	// BondCalendars overrides the two bond-event fixtures for particular
+	// symbols, so a test can give each bond its own calendar — a face in
+	// dollars for one, in yuan for another. A symbol with no entry gets
+	// PastBondEvents/FutureBondEvents.
+	BondCalendars map[string]BondCalendar
+
 	// Optional per-kind error injection (applied to both past and future).
 	DividendsError  error
 	SplitsError     error
@@ -43,6 +49,20 @@ type MockCorporateActionsServer struct {
 	// interval it carries is the whole point of the validation below, so a test
 	// can assert on what was actually sent rather than only on the outcome.
 	LastPastBondEventsRequest atomic.Pointer[corporateactions.GetPastBondsEventsRequest]
+}
+
+// BondCalendar is one bond's past and future events.
+type BondCalendar struct {
+	Past   []*corporateactions.BondEvent
+	Future []*corporateactions.BondEvent
+}
+
+// bondCalendar picks the events to serve for a symbol.
+func (m *MockCorporateActionsServer) bondCalendar(symbol string) BondCalendar {
+	if cal, ok := m.BondCalendars[symbol]; ok {
+		return cal
+	}
+	return BondCalendar{Past: m.PastBondEvents, Future: m.FutureBondEvents}
 }
 
 // DividendCalls is how many dividend RPCs the server has answered, past and
@@ -130,7 +150,7 @@ func (m *MockCorporateActionsServer) GetPastBondsEvents(_ context.Context, req *
 	if err := rejectDateToToday(req.GetDateTo()); err != nil {
 		return nil, err
 	}
-	return &corporateactions.GetPastBondsEventsResponse{Events: m.PastBondEvents}, nil
+	return &corporateactions.GetPastBondsEventsResponse{Events: m.bondCalendar(req.GetSymbol()).Past}, nil
 }
 
 // rejectDateToToday answers the error the broker answers for a date_to that is
@@ -155,5 +175,5 @@ func (m *MockCorporateActionsServer) GetFutureBondsEvents(_ context.Context, req
 	if m.BondEventsError != nil {
 		return nil, m.BondEventsError
 	}
-	return &corporateactions.GetFutureBondsEventsResponse{Events: m.FutureBondEvents}, nil
+	return &corporateactions.GetFutureBondsEventsResponse{Events: m.bondCalendar(req.GetSymbol()).Future}, nil
 }

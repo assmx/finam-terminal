@@ -548,6 +548,44 @@ func DefaultBondEvents() (past, future []*corporateactions.BondEvent) {
 	return past, future
 }
 
+// currencyCoupon is a 2026 coupon as the real calendar sends it: the currency
+// as a symbol ("$", "¥", "₽", "€"), not an ISO code.
+func currencyCoupon(month, day int32, value, currency, face string) *corporateactions.BondEvent {
+	return &corporateactions.BondEvent{
+		Date:     &date.Date{Year: 2026, Month: month, Day: day},
+		Type:     corporateactions.BondEventType_COUPON,
+		Value:    &decimal.Decimal{Value: value},
+		Currency: wrapperspb.String(currency),
+		EventDetails: &corporateactions.BondEvent_CouponDetails{
+			CouponDetails: &corporateactions.CouponEventDetails{FaceValue: &decimal.Decimal{Value: face}},
+		},
+	}
+}
+
+// CurrencyBondCalendars returns the reconnaissance bonds' calendars, keyed by
+// symbol, for MockCorporateActionsServer.BondCalendars. The calendar is the
+// only place the API names a bond's face currency:
+//
+//   - «РФ ЗО 27 Д» pays in "$" on a 200 000 face, both behind and ahead.
+//   - «ГПБ3P6CNY» pays in "¥" although GetAsset says it settles in roubles.
+//   - «ОФЗ 33 CNY» has a past coupon in "¥" and nothing scheduled, so a lookup
+//     that starts with the future calendar has to fall back to the past one.
+func CurrencyBondCalendars() map[string]BondCalendar {
+	return map[string]BondCalendar{
+		"RU000A10A851@MISX": {
+			Past:   []*corporateactions.BondEvent{currencyCoupon(6, 23, "4250.0", "$", "200000.0")},
+			Future: []*corporateactions.BondEvent{currencyCoupon(12, 23, "4250.0", "$", "200000.0")},
+		},
+		"RU000A1087C3@MISX": {
+			Past:   []*corporateactions.BondEvent{currencyCoupon(4, 9, "2.49", "¥", "100.0")},
+			Future: []*corporateactions.BondEvent{currencyCoupon(10, 9, "2.51", "¥", "100.0")},
+		},
+		"RU000A10DQA8@MISX": {
+			Past: []*corporateactions.BondEvent{currencyCoupon(6, 10, "352.88", "¥", "10000.0")},
+		},
+	}
+}
+
 func symbolTicker(symbol string) string {
 	for i, c := range symbol {
 		if c == '@' {

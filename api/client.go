@@ -67,6 +67,7 @@ type Client struct {
 	// Present means the broker answered, even if it named nothing.
 	instrumentCurrencyCache map[string]models.InstrumentCurrency // ticker or symbol -> quote currency and face value
 	unitValueCache          map[string]models.UnitValue          // ticker or symbol -> value of one piece
+	faceCurrencyCache       map[string]string                    // bond symbol -> face currency from its calendar; "" = calendar named none
 	securityCache           []models.SecurityInfo
 	assetMutex              sync.RWMutex
 
@@ -1627,7 +1628,7 @@ func (c *Client) fetchSplits(symbol string) ([]models.Split, error) {
 // sorted ascending by date with IsFuture flags. The oneof event details
 // (coupon/amortization/offer) are flattened into the model.
 func (c *Client) GetBondEvents(symbol string) ([]models.BondEvent, error) {
-	return calendarCached(c, "bondEvents", symbol, func() ([]models.BondEvent, error) {
+	return calendarCached(c, bondEventsCalendar, symbol, func() ([]models.BondEvent, error) {
 		return c.fetchBondEvents(symbol)
 	})
 }
@@ -1713,11 +1714,20 @@ func mapSplit(s *corporateactions.SplitInfo, isFuture bool) models.Split {
 }
 
 func mapBondEvent(e *corporateactions.BondEvent, isFuture bool) models.BondEvent {
+	// The calendar names the currency with a symbol ("$", "¥", "₽", "€"). The
+	// model carries the ISO code the rest of the terminal uses, so a coupon in
+	// "₽" and a dividend in "RUB" land in one payout total. A symbol the table
+	// does not know is kept as sent: shown on screen, it beats a blank.
+	currency := strings.TrimSpace(e.GetCurrency().GetValue())
+	if code, ok := currencyCode(currency); ok {
+		currency = code
+	}
+
 	be := models.BondEvent{
 		Date:     formatDate(e.GetDate()),
 		When:     dateValue(e.GetDate()),
 		Value:    formatDecimalOpt(e.GetValue()),
-		Currency: e.GetCurrency().GetValue(),
+		Currency: currency,
 		IsFuture: isFuture,
 	}
 	// Kind from the enum first, then refined/confirmed by the present oneof branch.
