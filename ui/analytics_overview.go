@@ -407,6 +407,11 @@ func renderValuation(v analytics.Worth, width int) string {
 	if v.DailyUnreported > 0 {
 		fmt.Fprintf(&b, "[yellow]без дневного P&L: %d[-]\n", v.DailyUnreported)
 	}
+	// A result the broker did report, in a currency there is no rate for, is
+	// left out of the day for the same reason and said so apart.
+	if v.DailyNoRate > 0 {
+		fmt.Fprintf(&b, "[yellow]без курса: %d[-]\n", v.DailyNoRate)
+	}
 
 	return b.String()
 }

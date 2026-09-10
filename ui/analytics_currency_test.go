@@ -215,6 +215,30 @@ func TestCurrencies_CountersSaySoOutLoud(t *testing.T) {
 	}
 }
 
+// TestOverview_ValuationSaysWhatHasNoRate: a position whose day's result is in
+// a currency without a rate is left out of the day and said so, and the opening
+// value is refused rather than wrong by the missing part.
+func TestOverview_ValuationSaysWhatHasNoRate(t *testing.T) {
+	app := overviewApp(currencyMock(map[string]models.InstrumentCurrency{
+		"SBER@MISX": {Quote: "RUB"},
+		"0700@XHKG": {Quote: "HKD"},
+	}, nil, nil), mcTestAccount())
+	setPositions(app,
+		models.Position{Symbol: "SBER@MISX", Quantity: "100", AveragePrice: "270", CurrentPrice: "280", DailyPnL: "100", UnrealizedPnL: "1000"},
+		models.Position{Symbol: "0700@XHKG", Quantity: "100", AveragePrice: "400", CurrentPrice: "410", DailyPnL: "50", UnrealizedPnL: "1000"},
+	)
+
+	updateAnalyticsOverview(app)
+
+	text := valuationText(app)
+	if !strings.Contains(text, "без курса: 1") {
+		t.Errorf("valuation panel does not say a position was left out for lack of a rate:\n%s", text)
+	}
+	if line := lineWith(text, "На начало дня"); !strings.Contains(line, "Н/Д") {
+		t.Errorf("opening value = %q, want Н/Д while the day is partial", line)
+	}
+}
+
 // TestOverview_RiskKeepsLoanNotBalance: a foreign balance is shown once, in the
 // currency panel; a foreign loan stays where the risk is.
 func TestOverview_RiskKeepsLoanNotBalance(t *testing.T) {
