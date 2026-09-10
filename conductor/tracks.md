@@ -212,5 +212,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 *Link: [./tracks/analytics_currency_20260910/](./tracks/analytics_currency_20260910/)*
 *Spec: [./tracks/analytics_currency_20260910/spec.md](./tracks/analytics_currency_20260910/spec.md)*
 *Plan: [./tracks/analytics_currency_20260910/plan.md](./tracks/analytics_currency_20260910/plan.md)*
-*Phases: 5 | Tasks: 13*
+*Phases: 5 | Tasks: 14*
 *Depends on: analytics_overview_20260903, analytics_history_20260903*
