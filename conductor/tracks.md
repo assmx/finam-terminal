@@ -202,3 +202,15 @@ This file tracks all major tracks for the project. Each track has its own detail
 *Plan: [./tracks/analytics_history_20260903/plan.md](./tracks/analytics_history_20260903/plan.md)*
 *Phases: 7 | Tasks: 21*
 *Depends on: analytics_overview_20260903*
+
+
+---
+
+
+- [ ] **Track: Analytics — валюты: оценка иностранных активов и структура портфеля по валюте**
+
+*Link: [./tracks/analytics_currency_20260910/](./tracks/analytics_currency_20260910/)*
+*Spec: [./tracks/analytics_currency_20260910/spec.md](./tracks/analytics_currency_20260910/spec.md)*
+*Plan: [./tracks/analytics_currency_20260910/plan.md](./tracks/analytics_currency_20260910/plan.md)*
+*Phases: 5 | Tasks: 13*
+*Depends on: analytics_overview_20260903, analytics_history_20260903*
