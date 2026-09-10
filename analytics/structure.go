@@ -138,6 +138,12 @@ type Allocation struct {
 	// Borrowed holds the negative cash lines: money owed, not held. They stay
 	// out of the base and are reported separately.
 	Borrowed []models.CashBalance
+
+	// ForeignCash holds the positive cash lines in any other currency. They
+	// cannot join the base — there are no exchange rates in the Trade API — but
+	// they are money the account holds, and dropping them would make it
+	// disappear from the screen.
+	ForeignCash []models.CashBalance
 }
 
 // Structure computes the portfolio breakdown.
@@ -181,9 +187,10 @@ func Structure(in StructureInput) Allocation {
 		holdings = append(holdings, Holding{Ticker: displayTicker(p), Name: p.Name, Value: value})
 	}
 
-	cash, borrowed := cashInBase(in.Cash, result.BaseCurrency)
+	cash, borrowed, foreign := cashInBase(in.Cash, result.BaseCurrency)
 	result.Cash = cash
 	result.Borrowed = borrowed
+	result.ForeignCash = foreign
 	result.Base += cash
 
 	result.Valid = result.Base > 0
@@ -213,23 +220,26 @@ func baseCurrency(cash []models.CashBalance) string {
 }
 
 // cashInBase sums the base-currency cash that counts as a holding, and
-// collects the negative lines separately. A negative balance is a margin loan:
-// including it would net a debt against real assets and understate every other
-// share.
-func cashInBase(cash []models.CashBalance, base string) (float64, []models.CashBalance) {
+// collects the negative lines and the positive foreign ones separately. A
+// negative balance is a margin loan: including it would net a debt against real
+// assets and understate every other share. A foreign balance cannot be
+// converted, so it is reported beside the base rather than inside it; an empty
+// line is not money held and is reported nowhere.
+func cashInBase(cash []models.CashBalance, base string) (float64, []models.CashBalance, []models.CashBalance) {
 	var total float64
-	var borrowed []models.CashBalance
+	var borrowed, foreign []models.CashBalance
 
 	for _, c := range cash {
-		if c.Amount < 0 {
+		switch {
+		case c.Amount < 0:
 			borrowed = append(borrowed, c)
-			continue
-		}
-		if strings.EqualFold(c.Currency, base) {
+		case strings.EqualFold(c.Currency, base):
 			total += c.Amount
+		case c.Amount > 0:
+			foreign = append(foreign, c)
 		}
 	}
-	return total, borrowed
+	return total, borrowed, foreign
 }
 
 // isForeign reports whether a position is denominated in a currency known to

@@ -45,13 +45,13 @@ func (a *App) onAnalyticsTab() bool {
 	return a.portfolioView.TabbedView.ActiveTab == TabAnalytics
 }
 
-// updateAnalyticsOverview redraws the five overview panels.
+// updateAnalyticsOverview redraws the six overview panels.
 //
 // It reads only state already in memory — positions and quotes from the same
-// five-second tick that feeds the Positions tab, the account's own margin
-// report, the instrument types from the startup asset cache and the sectors
-// from the index composition — and issues no request of its own. That is what
-// makes it safe to call on every tick.
+// five-second tick that feeds the Positions tab, the account's own valuation
+// and margin report, the instrument types from the startup asset cache and the
+// sectors from the index composition — and issues no request of its own. That
+// is what makes it safe to call on every tick.
 //
 // What it hands each panel is a function rather than a string: the panel lays
 // its rows out to its own width, which tview only settles while drawing.
@@ -61,7 +61,7 @@ func updateAnalyticsOverview(app *App) {
 	app.dataMutex.RLock()
 	if app.selectedIdx < 0 || app.selectedIdx >= len(app.accounts) {
 		app.dataMutex.RUnlock()
-		view.setOverviewStatic(muted("Счёт не выбран"), "", "", "", "")
+		view.setOverviewStatic(muted("Счёт не выбран"), "", "", "", "", "")
 		return
 	}
 
@@ -72,8 +72,9 @@ func updateAnalyticsOverview(app *App) {
 	app.dataMutex.RUnlock()
 
 	if account.LoadError != "" {
+		// Once at the top of each column, where the eye starts.
 		message := "[red]" + brokerDataError() + "[-]"
-		view.setOverviewStatic(message, "", "", message, "")
+		view.setOverviewStatic(message, "", "", message, "", "")
 		return
 	}
 
@@ -90,33 +91,41 @@ func updateAnalyticsOverview(app *App) {
 		GrossExposure: allocation.Base - allocation.Cash,
 	})
 
+	worth := analytics.Valuation(analytics.ValuationInput{
+		Account:   account,
+		Positions: positions,
+	})
+
 	view.setOverview(
 		func(w int) string { return renderStructure(allocation, w) },
 		func(w int) string { return renderSectors(allocation, sectorsKnown, sectorNote, w) },
 		app.sinceOpenSummaryRenderer(account),
-		func(w int) string { return renderRisk(account, risk, allocation, w) },
+		func(w int) string { return renderValuation(worth, w) },
+		func(w int) string { return renderRisk(account, risk, allocation, worth.FortsMargin, w) },
 		func(w int) string { return renderConcentration(allocation, w) },
 	)
 }
 
-// setOverview installs a renderer in each of the five panels and resizes them
-// to what they now hold, so the frames follow the content rather than the other
-// way round.
-func (av *AnalyticsView) setOverview(structure, sectors, sinceOpen, risk, concentration func(int) string) {
+// setOverview installs a renderer in each of the six panels — the left column
+// top to bottom, then the right — and resizes them to what they now hold, so
+// the frames follow the content rather than the other way round.
+func (av *AnalyticsView) setOverview(structure, sectors, sinceOpen, valuation, risk, concentration func(int) string) {
 	av.Structure.SetRender(structure)
 	av.Sectors.SetRender(sectors)
 	av.SinceOpen.SetRender(sinceOpen)
+	av.Valuation.SetRender(valuation)
 	av.Risk.SetRender(risk)
 	av.Concentration.SetRender(concentration)
 }
 
 // setOverviewStatic is setOverview for the states with nothing to lay out: no
 // account, or a broker that would not answer.
-func (av *AnalyticsView) setOverviewStatic(structure, sectors, sinceOpen, risk, concentration string) {
+func (av *AnalyticsView) setOverviewStatic(structure, sectors, sinceOpen, valuation, risk, concentration string) {
 	av.setOverview(
 		func(int) string { return structure },
 		func(int) string { return sectors },
 		func(int) string { return sinceOpen },
+		func(int) string { return valuation },
 		func(int) string { return risk },
 		func(int) string { return concentration },
 	)
@@ -222,20 +231,72 @@ func renderSectors(a analytics.Allocation, sectorsKnown bool, sectorNote string,
 	return b.String()
 }
 
-// renderRisk draws what the account reports about its margin, and the three
-// figures derived from it.
-func renderRisk(account models.AccountInfo, r analytics.Risk, a analytics.Allocation, width int) string {
+// valuationShareWidth is the column the percentages of the two result rows
+// share, so they line up under each other whatever the amounts beside them.
+const valuationShareWidth = 8
+
+// renderValuation draws what the account is worth and what it has made: the
+// value at the start of the day and now, the day's result, and the result on
+// the positions still open.
+func renderValuation(v analytics.Worth, width int) string {
+	var b strings.Builder
+
+	opening := notAvailable
+	if v.Opening.Valid {
+		opening = formatAmount(v.Opening.Value)
+	}
+	current := notAvailable
+	if v.Current.Valid {
+		current = fmt.Sprintf("[white::b]%s[-:-:-]", formatAmount(v.Current.Value))
+	}
+
+	fmt.Fprintf(&b, "%s\n", leaderRow("На начало дня", opening, width))
+	fmt.Fprintf(&b, "%s\n", leaderRow("Текущая", current, width))
+	fmt.Fprintf(&b, "%s\n", leaderRow("Прибыль за день", resultWithShare(v.Daily, v.DailyShare), width))
+	fmt.Fprintf(&b, "%s\n", leaderRow("Прибыль по позициям", resultWithShare(v.Unrealized, v.UnrealizedShare), width))
+
+	// Said out loud, like "без цены" in the structure panel: a day's result
+	// that silently left positions out would read as the whole day.
+	if v.DailyUnreported > 0 {
+		fmt.Fprintf(&b, "[yellow]без дневного P&L: %d[-]\n", v.DailyUnreported)
+	}
+
+	return b.String()
+}
+
+// resultWithShare is a signed amount followed by its percentage in a
+// fixed-width column. A result the account does not report is one Н/Д; a
+// result without a base keeps its amount and marks the percentage alone.
+func resultWithShare(amount, share analytics.Metric) string {
+	if !amount.Valid {
+		return notAvailable
+	}
+	percent := notAvailable
+	if share.Valid {
+		percent = fmt.Sprintf("[%s]%s[-]", amountTag(share.Value), signedPercent(share.Value))
+	}
+	return signedAmount(amount.Value) + " " + padTagged(percent, valuationShareWidth)
+}
+
+// renderRisk draws what the account reports about its money and margin, and
+// the three figures derived from it. The account's value itself is in the
+// valuation panel above; printing it here too would put the same number in
+// two frames a few rows apart.
+func renderRisk(account models.AccountInfo, r analytics.Risk, a analytics.Allocation, forts analytics.Metric, width int) string {
 	var b strings.Builder
 
 	// Two columns are given up to the level bullets below, so the plain rows
 	// indent to match and every value in the panel ends in the same place.
 	rowWidth := width - 2
 
-	equity := notAvailable
-	if r.EquityValid {
-		equity = fmt.Sprintf("[white::b]%s[-:-:-]", formatNumber(r.Equity, 2))
+	// Money the shares cannot include — there are no exchange rates to convert
+	// it — but money the account holds all the same.
+	for _, c := range a.ForeignCash {
+		fmt.Fprintf(&b, "  %s\n", leaderRow(
+			"остаток "+tview.Escape(c.Currency),
+			formatNumber(c.Amount, 2),
+			rowWidth))
 	}
-	fmt.Fprintf(&b, "  %s\n", leaderRow("Эквити", equity, rowWidth))
 
 	for _, c := range a.Borrowed {
 		fmt.Fprintf(&b, "  %s\n", leaderRow(
@@ -250,12 +311,21 @@ func renderRisk(account models.AccountInfo, r analytics.Risk, a analytics.Alloca
 		case "MC":
 			fmt.Fprintf(&b, "  %s\n", leaderRow("Начальная маржа", formatNumber(account.InitialMargin, 2), rowWidth))
 			fmt.Fprintf(&b, "  %s\n", leaderRow("Мин. маржа", formatNumber(account.MaintenanceMargin, 2), rowWidth))
+			// A unified account's own report has no line for the collateral
+			// its FORTS positions tie up; the positions carry it themselves.
+			if forts.Valid {
+				fmt.Fprintf(&b, "  %s\n", leaderRow("ГО FORTS", formatNumber(forts.Value, 2), rowWidth))
+			}
 		case "FORTS":
 			fmt.Fprintf(&b, "  %s\n", leaderRow("Резерв ГО", formatNumber(account.MoneyReserved, 2), rowWidth))
 		}
 	}
 
-	b.WriteString("\n")
+	// The blank line separates reported figures from derived ones, so there is
+	// nothing to separate when the account reported none.
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
 	writeMetric(&b, "Использование маржи", r.Utilization, analytics.UtilizationLevel, rowWidth)
 	writeMetric(&b, "Запас до маржин-колла", r.Cushion, analytics.CushionLevel, rowWidth)
 	writeLeverage(&b, r.Leverage, rowWidth)

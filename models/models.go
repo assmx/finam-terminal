@@ -71,6 +71,11 @@ type Position struct {
 	DailyPnL      string
 	UnrealizedPnL string
 	TotalValue    string
+
+	// MaintenanceMargin is the collateral the broker holds against the
+	// position. It is filled for FORTS positions only; every other position
+	// carries "N/A", which means "not reported" rather than zero.
+	MaintenanceMargin string
 }
 
 // GetCloseDirection returns the inverse direction needed to close the position.

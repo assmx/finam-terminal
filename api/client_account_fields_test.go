@@ -209,6 +209,48 @@ func TestGetAccountDetails_Cash(t *testing.T) {
 	}
 }
 
+// TestGetAccountDetails_PositionMaintenanceMargin maps the per-position
+// maintenance margin, which the broker fills for FORTS positions only. A
+// position without it must read as "not reported", never as a zero — summed
+// on a unified account, a zero would claim the derivatives section holds no
+// collateral.
+func TestGetAccountDetails_PositionMaintenanceMargin(t *testing.T) {
+	client := accountFieldsClient(&accounts.GetAccountResponse{
+		Positions: []*accounts.Position{
+			{
+				Symbol:            "SiZ6@RTSX",
+				Quantity:          &decimal.Decimal{Value: "2"},
+				MaintenanceMargin: &decimal.Decimal{Value: "15000.5"},
+			},
+			{
+				Symbol:   "SBER@MISX",
+				Quantity: &decimal.Decimal{Value: "10"},
+			},
+		},
+	})
+	// Both lot tiers cached, so resolving the symbols issues no GetAsset call
+	// (the fixture has no assets client to answer one).
+	for _, symbol := range []string{"SiZ6@RTSX", "SBER@MISX"} {
+		client.assetLotCache[symbol] = 1
+		client.tradeLotCache[symbol] = 1
+	}
+
+	_, positions, err := client.GetAccountDetails("ACC009")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(positions) != 2 {
+		t.Fatalf("len(positions) = %d, want 2", len(positions))
+	}
+
+	if got := positions[0].MaintenanceMargin; got != "15000.5" {
+		t.Errorf("FORTS position MaintenanceMargin = %q, want 15000.5", got)
+	}
+	if got := positions[1].MaintenanceMargin; got != "N/A" {
+		t.Errorf("stock position MaintenanceMargin = %q, want N/A (not reported)", got)
+	}
+}
+
 // TestGetAccountDetails_Dates maps first_trade_date / first_non_trade_date and
 // leaves them zero when the broker omits them.
 func TestGetAccountDetails_Dates(t *testing.T) {

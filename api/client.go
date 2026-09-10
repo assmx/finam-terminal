@@ -1086,6 +1086,8 @@ func (c *Client) GetAccountDetails(accountID string) (*models.AccountInfo, []mod
 			CurrentPrice:  formatDecimal(pos.CurrentPrice),
 			DailyPnL:      formatDecimal(pos.DailyPnl),
 			UnrealizedPnL: formatDecimal(pos.UnrealizedPnl),
+
+			MaintenanceMargin: formatDecimal(pos.MaintenanceMargin),
 		}
 
 		// Filter out zero positions (historical or closed)

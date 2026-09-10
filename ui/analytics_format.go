@@ -64,6 +64,28 @@ func colouredAmount(v float64) string {
 // formatAmount renders money with two decimals and thousands separators.
 func formatAmount(v float64) string { return formatNumber(v, 2) }
 
+// signedAmount renders a result with its sign and in its own colour. A change
+// reads as a change only when a gain says "+"; colouredAmount, which leaves
+// the plus off, is for totals.
+func signedAmount(v float64) string {
+	text := formatAmount(v)
+	if v > 0 {
+		text = "+" + text
+	}
+	return fmt.Sprintf("[%s]%s[-]", amountTag(v), text)
+}
+
+// signedPercent renders a signed 0..1 share with two decimals. It is not
+// formatPercent's one decimal because a day's move is routinely a fraction of
+// a percent, which one decimal would round into something else.
+func signedPercent(share float64) string {
+	text := fmt.Sprintf("%.2f%%", share*100)
+	if share > 0 {
+		text = "+" + text
+	}
+	return text
+}
+
 // formatShareOrNA renders a 0..1 share as a percentage, or "Н/Д" when the
 // share could not be computed. An uncomputable ratio must never reach the
 // screen as 0%.

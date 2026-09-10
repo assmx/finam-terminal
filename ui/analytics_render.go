@@ -41,6 +41,7 @@ const (
 	maxStructureLines     = 12
 	maxSectorLines        = 12
 	maxSinceOpenLines     = 12
+	maxValuationLines     = 6
 	maxRiskLines          = 14
 	maxConcentrationLines = 6
 	maxTradeStatsLines    = 12
@@ -79,10 +80,11 @@ type AnalyticsView struct {
 	Pages  *tview.Pages
 
 	// Overview: two columns of stacked panels. Left is what the portfolio is
-	// made of, right is what it risks and what it has earned.
+	// made of, right is what it is worth, what it has made and what it risks.
 	Structure      *analyticsPanel
 	Sectors        *analyticsPanel
 	SinceOpen      *analyticsPanel
+	Valuation      *analyticsPanel
 	Risk           *analyticsPanel
 	Concentration  *analyticsPanel
 	OverviewStatus *tview.TextView
@@ -118,6 +120,7 @@ func NewAnalyticsView() *AnalyticsView {
 		Structure:      createAnalyticsPanel(" Структура портфеля "),
 		Sectors:        createAnalyticsPanel(" Секторы "),
 		SinceOpen:      createAnalyticsPanel(" Итог с открытия "),
+		Valuation:      createAnalyticsPanel(" Оценка "),
 		Risk:           createAnalyticsPanel(" Маржа и риск "),
 		Concentration:  createAnalyticsPanel(" Концентрация "),
 		OverviewStatus: createAnalyticsStatus(),
@@ -138,7 +141,10 @@ func NewAnalyticsView() *AnalyticsView {
 		AddPanel(av.SinceOpen, maxSinceOpenLines).
 		AddSpacer()
 
+	// The valuation leads the column: it is the figure the broker's own
+	// terminal opens its account summary with, and it is short.
 	overviewRight := newAnalyticsStack().
+		AddPanel(av.Valuation, maxValuationLines).
 		AddPanel(av.Risk, maxRiskLines).
 		AddPanel(av.Concentration, maxConcentrationLines).
 		AddSpacer()

@@ -280,6 +280,34 @@ func TestStructure_CashOnlyBaseCurrency(t *testing.T) {
 	}
 }
 
+// TestStructure_ForeignCashReported keeps the money the base cannot include in
+// sight: a positive balance in another currency is reported on its own rather
+// than silently dropped. A loan stays with Borrowed, and an empty line is not
+// money held.
+func TestStructure_ForeignCashReported(t *testing.T) {
+	got := Structure(StructureInput{
+		Cash: []models.CashBalance{
+			{Currency: "RUB", Amount: 1000},
+			{Currency: "USD", Amount: 500},
+			{Currency: "CNY", Amount: 0},
+			{Currency: "EUR", Amount: -20},
+		},
+	})
+
+	if len(got.ForeignCash) != 1 {
+		t.Fatalf("ForeignCash = %+v, want only the USD line", got.ForeignCash)
+	}
+	if c := got.ForeignCash[0]; c.Currency != "USD" || c.Amount != 500 {
+		t.Errorf("ForeignCash[0] = %+v, want USD 500", c)
+	}
+	if len(got.Borrowed) != 1 || got.Borrowed[0].Currency != "EUR" {
+		t.Errorf("Borrowed = %+v, want the EUR loan", got.Borrowed)
+	}
+	if math.Abs(got.Base-1000) > 1e-9 {
+		t.Errorf("Base = %v, want 1000: reporting the USD line must not fold it in", got.Base)
+	}
+}
+
 // TestStructure_ForeignPositionsExcluded drops a position whose currency is
 // known to differ from the base and reports how many were left out.
 func TestStructure_ForeignPositionsExcluded(t *testing.T) {

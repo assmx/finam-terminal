@@ -32,6 +32,23 @@ func riskText(app *App) string {
 	return panelText(view.Risk) + panelText(view.Concentration) + panelText(view.SinceOpen)
 }
 
+// valuationText reads the headline panel on its own: what it shows is specific
+// enough to be asserted row by row.
+func valuationText(app *App) string {
+	return panelText(app.portfolioView.TabbedView.Analytics.Valuation)
+}
+
+// lineWith returns the first line of text that contains marker, so a test can
+// ask what a particular row says rather than whether a figure appears anywhere.
+func lineWith(text, marker string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, marker) {
+			return line
+		}
+	}
+	return ""
+}
+
 // panelText is a panel's title and body together. The titles carry the section
 // names that used to be headings inside the text, so a test asking whether the
 // column names a block has to look at both.
@@ -108,7 +125,7 @@ func TestOverview_RendersRisk(t *testing.T) {
 	updateAnalyticsOverview(app)
 
 	text := riskText(app)
-	for _, want := range []string{"Эквити", "Использование маржи", "Запас до маржин-колла", "Плечо", "Концентрация"} {
+	for _, want := range []string{"Использование маржи", "Запас до маржин-колла", "Плечо", "Концентрация"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("risk column %q does not contain %q", text, want)
 		}
@@ -275,8 +292,168 @@ func TestOverview_LoadErrorShowsMessage(t *testing.T) {
 	if text := structureText(app); !strings.Contains(text, "Ошибка при загрузке данных от брокера") {
 		t.Errorf("structure column %q does not show the broker error", text)
 	}
-	if text := riskText(app); !strings.Contains(text, "Ошибка при загрузке данных от брокера") {
-		t.Errorf("risk column %q does not show the broker error", text)
+	if text := valuationText(app); !strings.Contains(text, "Ошибка при загрузке данных от брокера") {
+		t.Errorf("the top of the right column %q does not show the broker error", text)
+	}
+}
+
+// TestOverview_RendersValuation checks the headline block against the broker's
+// own terminal: 67 629.18 now and +43.26 today put the start of the day at
+// 67 585.92 and the day at +0.06%; −3 041.57 on 70 000 of cost is −4.35%.
+func TestOverview_RendersValuation(t *testing.T) {
+	app := overviewApp(typeMock(), models.AccountInfo{
+		ID:            "acc1",
+		Equity:        "67629.18",
+		UnrealizedPnL: "-3041.57",
+		PortfolioKind: "MC",
+		HasMarginData: true,
+	})
+	app.dataMutex.Lock()
+	app.positions["acc1"] = []models.Position{
+		{Symbol: "SBER@MISX", Ticker: "SBER", Quantity: "100", AveragePrice: "400", CurrentPrice: "380", DailyPnL: "40.00"},
+		{Symbol: "GAZP@MISX", Ticker: "GAZP", Quantity: "200", AveragePrice: "150", CurrentPrice: "140", DailyPnL: "3.26"},
+	}
+	app.dataMutex.Unlock()
+
+	updateAnalyticsOverview(app)
+
+	text := valuationText(app)
+	rows := []struct{ label, figures string }{
+		{"На начало дня", "67 585.92"},
+		{"Текущая", "67 629.18"},
+		{"Прибыль за день", "+43.26"},
+		{"Прибыль за день", "+0.06%"},
+		{"Прибыль по позициям", "-3 041.57"},
+		{"Прибыль по позициям", "-4.35%"},
+	}
+	for _, r := range rows {
+		if line := lineWith(text, r.label); !strings.Contains(line, r.figures) {
+			t.Errorf("row %q = %q, want it to show %q", r.label, line, r.figures)
+		}
+	}
+}
+
+// TestOverview_ValuationPartialDay: the broker leaves daily_pnl empty for a
+// FORTS position. The day's figure is shown for what is reported and flagged
+// as partial; the opening value, which would be wrong by the missing part, is
+// Н/Д.
+func TestOverview_ValuationPartialDay(t *testing.T) {
+	app := overviewApp(typeMock(), mcTestAccount())
+	app.dataMutex.Lock()
+	app.positions["acc1"] = []models.Position{
+		{Symbol: "SBER@MISX", Ticker: "SBER", Quantity: "100", CurrentPrice: "280", DailyPnL: "120"},
+		{Symbol: "SiZ6@RTSX", Ticker: "SiZ6", Quantity: "1", CurrentPrice: "90000", DailyPnL: "N/A"},
+	}
+	app.dataMutex.Unlock()
+
+	updateAnalyticsOverview(app)
+
+	text := valuationText(app)
+	if line := lineWith(text, "Прибыль за день"); !strings.Contains(line, "+120.00") {
+		t.Errorf("day row = %q, want the reported +120.00", line)
+	}
+	if !strings.Contains(text, "без дневного P&L: 1") {
+		t.Errorf("valuation %q does not say the day's result is partial", text)
+	}
+	if line := lineWith(text, "На начало дня"); !strings.Contains(line, "Н/Д") {
+		t.Errorf("opening row = %q, want Н/Д while the day is partial", line)
+	}
+}
+
+// TestOverview_CurrentValueShownOnce: the current value moved from the risk
+// panel to the valuation panel, and the same number printed in two panels
+// three rows apart would be noise.
+func TestOverview_CurrentValueShownOnce(t *testing.T) {
+	app := overviewApp(typeMock(), mcTestAccount())
+	seedPositions(app)
+
+	updateAnalyticsOverview(app)
+
+	right := valuationText(app) + riskText(app)
+	if got := strings.Count(right, "500 000.00"); got != 1 {
+		t.Errorf("the current value 500 000.00 appears %d times, want once:\n%s", got, right)
+	}
+}
+
+// TestOverview_RiskShowsForeignCash: a balance in another currency cannot join
+// the shares, but it is money the account holds and must stay visible.
+func TestOverview_RiskShowsForeignCash(t *testing.T) {
+	account := mcTestAccount()
+	account.Cash = append(account.Cash, models.CashBalance{Currency: "USD", Amount: 500})
+	app := overviewApp(typeMock(), account)
+	seedPositions(app)
+
+	updateAnalyticsOverview(app)
+
+	if line := lineWith(riskText(app), "остаток USD"); !strings.Contains(line, "500.00") {
+		t.Errorf("foreign cash row = %q, want USD 500.00", line)
+	}
+}
+
+// TestOverview_RiskShowsFortsMarginOnUnifiedAccount: on a unified (MC) account
+// the collateral held for FORTS positions shows nowhere in the account's own
+// report, so it is summed from the positions that carry it.
+func TestOverview_RiskShowsFortsMarginOnUnifiedAccount(t *testing.T) {
+	app := overviewApp(typeMock(), mcTestAccount())
+	app.dataMutex.Lock()
+	app.positions["acc1"] = []models.Position{
+		{Symbol: "SBER@MISX", Ticker: "SBER", Quantity: "100", CurrentPrice: "280", MaintenanceMargin: "N/A"},
+		{Symbol: "SiZ6@RTSX", Ticker: "SiZ6", Quantity: "1", CurrentPrice: "90000", MaintenanceMargin: "15000"},
+	}
+	app.dataMutex.Unlock()
+
+	updateAnalyticsOverview(app)
+
+	if line := lineWith(riskText(app), "ГО FORTS"); !strings.Contains(line, "15 000.00") {
+		t.Errorf("FORTS collateral row = %q, want 15 000.00", line)
+	}
+}
+
+// TestSignedAmount: a change reads as a change only when a gain says "+".
+func TestSignedAmount(t *testing.T) {
+	tests := []struct {
+		in   float64
+		want string
+	}{
+		{43.26, "[green]+43.26[-]"},
+		{-3041.57, "[red]-3 041.57[-]"},
+		{0, "[white]0.00[-]"},
+	}
+	for _, tt := range tests {
+		if got := signedAmount(tt.in); got != tt.want {
+			t.Errorf("signedAmount(%v) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestSignedPercent keeps two decimals: a day's move is often a fraction of a
+// percent, and one decimal would round +0.06% up to +0.1%.
+func TestSignedPercent(t *testing.T) {
+	tests := []struct {
+		in   float64
+		want string
+	}{
+		{43.26 / 67585.92, "+0.06%"},
+		{-0.04345, "-4.35%"},
+		{0, "0.00%"},
+	}
+	for _, tt := range tests {
+		if got := signedPercent(tt.in); got != tt.want {
+			t.Errorf("signedPercent(%v) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestOverview_NoFortsMarginWithoutFortsPositions: with nothing reporting it
+// the row is left out rather than claiming a zero the broker never sent.
+func TestOverview_NoFortsMarginWithoutFortsPositions(t *testing.T) {
+	app := overviewApp(typeMock(), mcTestAccount())
+	seedPositions(app)
+
+	updateAnalyticsOverview(app)
+
+	if text := riskText(app); strings.Contains(text, "ГО FORTS") {
+		t.Errorf("risk column %q shows FORTS collateral for an account with no FORTS positions", text)
 	}
 }
 

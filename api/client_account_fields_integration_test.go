@@ -5,6 +5,9 @@ package api
 import (
 	"testing"
 	"time"
+
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/accounts"
+	"google.golang.org/genproto/googleapis/type/decimal"
 )
 
 // TestIntegration_GetAccountDetails_MarginFields walks the MC account end to
@@ -81,6 +84,43 @@ func TestIntegration_GetAccountDetails_FORTS(t *testing.T) {
 	}
 	if !account.FirstTradeDate.IsZero() {
 		t.Errorf("FirstTradeDate = %v, want zero: this fixture sends no date", account.FirstTradeDate)
+	}
+}
+
+// TestIntegration_GetAccountDetails_PositionMaintenanceMargin carries the
+// per-position collateral through the real codec: filled on a FORTS position,
+// absent — and so "not reported" — on a stock one.
+func TestIntegration_GetAccountDetails_PositionMaintenanceMargin(t *testing.T) {
+	client, ts := setupTestServer(t)
+
+	ts.Accounts.Positions["ACC001"] = []*accounts.Position{
+		{
+			Symbol:            "SiZ6@RTSX",
+			Quantity:          &decimal.Decimal{Value: "2"},
+			CurrentPrice:      &decimal.Decimal{Value: "90000"},
+			MaintenanceMargin: &decimal.Decimal{Value: "15000.5"},
+		},
+		{
+			Symbol:       "SBER@TQBR",
+			Quantity:     &decimal.Decimal{Value: "100"},
+			CurrentPrice: &decimal.Decimal{Value: "285.00"},
+		},
+	}
+
+	_, positions, err := client.GetAccountDetails("ACC001")
+	if err != nil {
+		t.Fatalf("GetAccountDetails failed: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, p := range positions {
+		got[p.Symbol] = p.MaintenanceMargin
+	}
+	if got["SiZ6@RTSX"] != "15000.5" {
+		t.Errorf("FORTS position MaintenanceMargin = %q, want 15000.5", got["SiZ6@RTSX"])
+	}
+	if got["SBER@TQBR"] != "N/A" {
+		t.Errorf("stock position MaintenanceMargin = %q, want N/A", got["SBER@TQBR"])
 	}
 }
 
