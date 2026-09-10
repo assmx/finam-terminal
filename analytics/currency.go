@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -152,6 +153,73 @@ func NeedsFaceCurrency(p models.Position, last string, inst Instrument) bool {
 		return false
 	}
 	return faceCheck(p, last, inst) != faceInQuote
+}
+
+// RatesToFetch lists the rouble rates a portfolio needs to be measured in its
+// base currency, sorted: one for each currency held — a position valued in it,
+// or a positive cash line — that is neither the rouble nor the base, plus the
+// base's own when the base is not the rouble, since a cross rate needs both
+// legs. A rouble-only account needs none, and so costs no request. Whether a
+// currency has a pair to ask for is the API layer's business; this lists what
+// the portfolio holds.
+func RatesToFetch(in StructureInput) []string {
+	base := strings.ToUpper(baseCurrency(in.Cash))
+
+	held := make(map[string]bool)
+	for _, p := range in.Positions {
+		money := ValuePosition(p, quoteLast(in.Quotes, p.Symbol), lookupInstrument(in.Instruments, p), base)
+		if money.Valid && money.Value != 0 {
+			held[strings.ToUpper(money.Currency)] = true
+		}
+	}
+	for _, c := range in.Cash {
+		if code := strings.ToUpper(strings.TrimSpace(c.Currency)); c.Amount > 0 && code != "" {
+			held[code] = true
+		}
+	}
+
+	need := make(map[string]bool)
+	for code := range held {
+		if code == base {
+			continue
+		}
+		if code != defaultBaseCurrency {
+			need[code] = true
+		}
+		if base != defaultBaseCurrency {
+			need[base] = true
+		}
+	}
+	return sortedKeys(need)
+}
+
+// BondsNeedingFace lists, sorted, the held bonds whose face currency only a
+// calendar request can settle (see NeedsFaceCurrency). Ordinary rouble and
+// yuan bonds are not on it, so a portfolio of them costs no calendar request.
+func BondsNeedingFace(in StructureInput) []string {
+	need := make(map[string]bool)
+	for _, p := range in.Positions {
+		if qty, ok := ParseNumber(p.Quantity); !ok || qty == 0 {
+			continue
+		}
+		if NeedsFaceCurrency(p, quoteLast(in.Quotes, p.Symbol), lookupInstrument(in.Instruments, p)) {
+			need[p.Symbol] = true
+		}
+	}
+	return sortedKeys(need)
+}
+
+// sortedKeys returns a set's members in order, or nil for an empty set.
+func sortedKeys(set map[string]bool) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // faceVerdict is what the per-piece value says about a bond's face.

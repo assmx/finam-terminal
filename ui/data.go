@@ -116,8 +116,10 @@ func (a *App) applyAccountData(accountID string, pos []models.Position, quotes m
 		updateStatusBar(a)
 
 		// The overview is computed from exactly the data that just changed, and
-		// only while it is on screen.
+		// only while it is on screen. The tick is also its schedule for rates
+		// and face currencies: ensureCurrencyData asks only for what is due.
 		if a.onAnalyticsTab() {
+			a.ensureCurrencyData()
 			updateAnalyticsOverview(a)
 		}
 

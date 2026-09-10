@@ -73,7 +73,10 @@ func updateAnalyticsOverview(app *App) {
 	quotes := app.quotes[account.ID]
 	sectors, sectorsKnown, sectorNote := app.sectorMapLocked()
 	rates := app.fxRatesLocked()
+	fxStatus := app.fxStatusLocked()
 	app.dataMutex.RUnlock()
+
+	view.OverviewStatus.SetText(fxStatus)
 
 	if account.LoadError != "" {
 		// Once at the top of each column, where the eye starts.

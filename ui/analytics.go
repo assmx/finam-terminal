@@ -5,7 +5,6 @@ import (
 
 	"finam-terminal/analytics"
 	"finam-terminal/api"
-	"finam-terminal/models"
 )
 
 // analyticsState is everything the Analytics tab remembers between draws.
@@ -24,12 +23,6 @@ type analyticsState struct {
 	// account: a rate is a rate whichever account asks, and switching accounts
 	// must not ask again.
 	fx fxState
-}
-
-// fxState holds the exchange rates the overview converts with, keyed by
-// currency code as GetFXRates returns them.
-type fxState struct {
-	rates map[string]models.FXRate
 }
 
 // analyticsAccountData is everything the tab remembers for one account.
@@ -59,7 +52,7 @@ func newAnalyticsState() *analyticsState {
 	return &analyticsState{
 		period:    analytics.DefaultPreset,
 		byAccount: make(map[string]*analyticsAccountData),
-		fx:        fxState{rates: make(map[string]models.FXRate)},
+		fx:        newFXState(),
 	}
 }
 
@@ -109,6 +102,7 @@ func (a *App) SetAnalyticsScreen(screen AnalyticsScreen) {
 	switch screen {
 	case AnalyticsOverview:
 		a.ensureIndexLoaded()
+		a.ensureCurrencyData()
 		updateAnalyticsOverview(a)
 	case AnalyticsTrades, AnalyticsMoney:
 		a.ensureHistoryLoaded()
@@ -146,9 +140,11 @@ func analyticsScreenForDigit(r rune) (AnalyticsScreen, bool) {
 func (a *App) RefreshAnalytics() {
 	switch a.analyticsView().ActiveScreen {
 	case AnalyticsOverview:
-		// The overview draws from memory; the only thing it can be missing is
-		// the index composition behind the sector line.
+		// The overview draws from memory; what it can be missing is the index
+		// composition behind the sector line, and the rates and face
+		// currencies behind the currency panel.
 		a.reloadIndexForSectors()
+		a.refreshCurrencyData()
 		updateAnalyticsOverview(a)
 	case AnalyticsTrades, AnalyticsMoney:
 		a.refreshHistoryTail()

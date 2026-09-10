@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -183,6 +184,116 @@ func TestRateTo(t *testing.T) {
 
 	if got := RateTo("USD", "RUB", nil); got.Valid {
 		t.Errorf("RateTo with no rates = %+v, want invalid", got)
+	}
+}
+
+// TestRatesToFetch lists the rates a portfolio needs: one per held currency
+// that is neither the rouble nor the base, plus the base's own when it is not
+// the rouble — a cross rate needs both legs. A rouble account needs none.
+func TestRatesToFetch(t *testing.T) {
+	tests := []struct {
+		name string
+		in   StructureInput
+		want []string
+	}{
+		{
+			name: "rouble account",
+			in: StructureInput{
+				Positions:   []models.Position{pos("YDEX@MISX", "1", "100")},
+				Instruments: map[string]Instrument{"YDEX@MISX": {Quote: "RUB"}},
+				Cash:        []models.CashBalance{{Currency: "RUB", Amount: 10}},
+			},
+			want: nil,
+		},
+		{
+			name: "foreign cash and positions, sorted and deduplicated",
+			in: StructureInput{
+				Positions: []models.Position{pos("AMZN@XNGS", "1", "100"), pos("B@MISX", "1", "93.5"), pos("0700@XHKG", "1", "400")},
+				Instruments: map[string]Instrument{
+					"AMZN@XNGS": {Quote: "usd"},
+					"B@MISX":    instOFZCNY,
+					"0700@XHKG": {Quote: "HKD"},
+				},
+				Cash: []models.CashBalance{{Currency: "RUB", Amount: 1}, {Currency: "USD", Amount: 5}, {Currency: "EUR", Amount: 0}, {Currency: "CNY", Amount: -3}},
+			},
+			// EUR is an empty line and CNY a loan in cash — only the bond makes
+			// CNY needed. HKD is asked for too: whether a pair exists is the API
+			// layer's table, not this one's.
+			want: []string{"CNY", "HKD", "USD"},
+		},
+		{
+			name: "a zero or unpriced position needs nothing",
+			in: StructureInput{
+				Positions:   []models.Position{pos("AMZN@XNGS", "0", "100"), pos("X@XNGS", "1", "N/A")},
+				Instruments: map[string]Instrument{"AMZN@XNGS": {Quote: "USD"}, "X@XNGS": {Quote: "EUR"}},
+			},
+			want: nil,
+		},
+		{
+			name: "dollar base needs the dollar leg for roubles",
+			in: StructureInput{
+				Positions:   []models.Position{pos("YDEX@MISX", "1", "100")},
+				Instruments: map[string]Instrument{"YDEX@MISX": {Quote: "RUB"}},
+				Cash:        []models.CashBalance{{Currency: "USD", Amount: 10}},
+			},
+			want: []string{"USD"},
+		},
+		{
+			name: "dollar base holding yuan needs both legs",
+			in: StructureInput{
+				Cash: []models.CashBalance{{Currency: "USD", Amount: 10}, {Currency: "CNY", Amount: 10}},
+			},
+			want: []string{"CNY", "USD"},
+		},
+		{
+			name: "dollar-only account needs nothing",
+			in:   StructureInput{Cash: []models.CashBalance{{Currency: "USD", Amount: 10}}},
+			want: nil,
+		},
+		{
+			name: "an unresolved bond needs its settlement currency",
+			in: StructureInput{
+				Positions:   []models.Position{pos("B@MISX", "1", "100")},
+				Instruments: map[string]Instrument{"B@MISX": {Quote: "CNY", FaceValue: 100, Unit: models.UnitValue{Currency: "CNY", Value: 5000}}},
+			},
+			want: []string{"CNY"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RatesToFetch(tt.in)
+			if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Errorf("RatesToFetch = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBondsNeedingFace lists the held bonds a calendar request would settle, and
+// nothing else.
+func TestBondsNeedingFace(t *testing.T) {
+	in := StructureInput{
+		Positions: []models.Position{
+			pos("YDEX@MISX", "9", "3811"),
+			pos("RU000A10BF48@MISX", "10", "100.72"),
+			pos("RU000A10A851@MISX", "1", "97.25"),
+			pos("RU000A1087C3@MISX", "10", "101.5662"),
+			pos("DONE@MISX", "1", "97.25"),
+			pos("ZERO@MISX", "0", "97.25"),
+		},
+		Instruments: map[string]Instrument{
+			"YDEX@MISX":         instYDEX,
+			"RU000A10BF48@MISX": instYandexBond,
+			"RU000A10A851@MISX": instReplacement,
+			"RU000A1087C3@MISX": instGPBCNY,
+			"DONE@MISX":         withFace(instReplacement, "USD"),
+			"ZERO@MISX":         instReplacement,
+		},
+		Quotes: map[string]*models.Quote{"RU000A10BF48@MISX": quote("RU000A10BF48@MISX", "100.7")},
+	}
+	got := BondsNeedingFace(in)
+	if fmt.Sprint(got) != "[RU000A1087C3@MISX RU000A10A851@MISX]" {
+		t.Errorf("BondsNeedingFace = %v, want the two foreign-face bonds, sorted", got)
 	}
 }
 
