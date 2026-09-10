@@ -88,7 +88,7 @@ func updateAnalyticsOverview(app *App) {
 
 	risk := analytics.RiskMetrics(analytics.RiskInput{
 		Account:       account,
-		GrossExposure: allocation.Base - allocation.Cash,
+		GrossExposure: allocation.Exposure,
 	})
 
 	worth := analytics.Valuation(analytics.ValuationInput{

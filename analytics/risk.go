@@ -39,8 +39,9 @@ type Metric struct {
 type RiskInput struct {
 	Account models.AccountInfo
 
-	// GrossExposure is the sum of position values by magnitude — Allocation's
-	// base without its cash line. Leverage compares it to equity.
+	// GrossExposure is the sum of position values by magnitude, converted into
+	// the base currency — Allocation.Exposure, which leaves every kind of cash
+	// out, bought currency included. Leverage compares it to equity.
 	GrossExposure float64
 }
 
