@@ -65,12 +65,12 @@ func SafeShare(part, whole float64) float64 {
 // neither is readable the bool is false and the caller counts the position as
 // unpriced.
 //
-// faceValue switches the formula for bonds quoted as a percent of par:
-// price/100 × faceValue × quantity. It is 0 at every call site today, which
-// keeps the plain price × quantity form — the reconnaissance could not observe
-// a real bond position, so the percent-of-par format stays unconfirmed. Both
-// screens go through this one function, so turning it on is a single change
-// that cannot make them disagree.
+// faceValue switches the formula for bonds, whose price is a percentage of
+// face: price/100 × faceValue × quantity. The reconnaissance of 2026-09-10
+// confirmed the format on a live bond position (current_price 100.7 on a
+// 1 000 face, with an unrealised result that only adds up through the face).
+// A faceValue of 0 keeps the plain price × quantity form for everything else.
+// ValuePosition is the caller that decides which one applies.
 func PositionValue(quantity, last, brokerPrice string, faceValue float64) (float64, bool) {
 	qty, ok := ParseNumber(quantity)
 	if !ok {
