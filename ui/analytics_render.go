@@ -39,6 +39,7 @@ var analyticsScreens = []struct {
 // push the panel below it off the screen, so each one has a ceiling.
 const (
 	maxStructureLines     = 12
+	maxCurrencyLines      = 10
 	maxSectorLines        = 12
 	maxSinceOpenLines     = 12
 	maxValuationLines     = 6
@@ -82,6 +83,7 @@ type AnalyticsView struct {
 	// Overview: two columns of stacked panels. Left is what the portfolio is
 	// made of, right is what it is worth, what it has made and what it risks.
 	Structure      *analyticsPanel
+	Currencies     *analyticsPanel
 	Sectors        *analyticsPanel
 	SinceOpen      *analyticsPanel
 	Valuation      *analyticsPanel
@@ -118,6 +120,7 @@ func NewAnalyticsView() *AnalyticsView {
 		Header:         createAnalyticsBar(),
 		Pages:          tview.NewPages(),
 		Structure:      createAnalyticsPanel(" Структура портфеля "),
+		Currencies:     createAnalyticsPanel(" Валюты "),
 		Sectors:        createAnalyticsPanel(" Секторы "),
 		SinceOpen:      createAnalyticsPanel(" Итог с открытия "),
 		Valuation:      createAnalyticsPanel(" Оценка "),
@@ -135,8 +138,13 @@ func NewAnalyticsView() *AnalyticsView {
 		PayoutStatus:   createAnalyticsStatus(),
 	}
 
+	// The currency breakdown sits under the one by type: both cut the same
+	// base, and the eye reads them as one account of what the portfolio is.
+	// The since-open summary stays last, the first to give way when the column
+	// runs short.
 	overviewLeft := newAnalyticsStack().
 		AddPanel(av.Structure, maxStructureLines).
+		AddPanel(av.Currencies, maxCurrencyLines).
 		AddPanel(av.Sectors, maxSectorLines).
 		AddPanel(av.SinceOpen, maxSinceOpenLines).
 		AddSpacer()

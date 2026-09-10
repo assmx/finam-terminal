@@ -67,6 +67,7 @@ func TestPanelRendersToItsOwnWidth(t *testing.T) {
 			widths = append(widths, w)
 			return strings.Repeat("─", w)
 		},
+		func(int) string { return "валюты" },
 		func(int) string { return "сектор" },
 		func(int) string { return "итог" },
 		func(int) string { return "оценка" },
@@ -100,7 +101,7 @@ func TestPanelRendersToItsOwnWidth(t *testing.T) {
 // deep, which is the complaint the redesign started from.
 func TestOverviewPanelsFitTheirContent(t *testing.T) {
 	view := NewAnalyticsView()
-	view.setOverviewStatic("одна\nдве\nтри", "сектор", "итог", "оценка", "риск", "концентрация")
+	view.setOverviewStatic("одна\nдве\nтри", "валюты", "сектор", "итог", "оценка", "риск", "концентрация")
 
 	drawAnalytics(t, view, 120, 40)
 
@@ -115,7 +116,7 @@ func TestOverviewPanelsFitTheirContent(t *testing.T) {
 // The cap is what stops a long list pushing the panel below it off the screen.
 func TestOverviewPanelsCapLongContent(t *testing.T) {
 	view := NewAnalyticsView()
-	view.setOverviewStatic(strings.Repeat("строка\n", 40), "сектор", "итог", "оценка", "риск", "концентрация")
+	view.setOverviewStatic(strings.Repeat("строка\n", 40), "валюты", "сектор", "итог", "оценка", "риск", "концентрация")
 
 	drawAnalytics(t, view, 120, 60)
 
@@ -129,11 +130,11 @@ func TestOverviewPanelsCapLongContent(t *testing.T) {
 func TestOverviewPanelsShrinkOnRedraw(t *testing.T) {
 	view := NewAnalyticsView()
 
-	view.setOverviewStatic("одна\nдве\nтри\nчетыре\nпять", "сектор", "итог", "оценка", "риск", "концентрация")
+	view.setOverviewStatic("одна\nдве\nтри\nчетыре\nпять", "валюты", "сектор", "итог", "оценка", "риск", "концентрация")
 	drawAnalytics(t, view, 120, 40)
 	tall := panelHeight(view.Structure)
 
-	view.setOverviewStatic("одна", "сектор", "итог", "оценка", "риск", "концентрация")
+	view.setOverviewStatic("одна", "валюты", "сектор", "итог", "оценка", "риск", "концентрация")
 	drawAnalytics(t, view, 120, 40)
 	short := panelHeight(view.Structure)
 
@@ -152,12 +153,13 @@ func TestOverviewPanelsShrinkOnRedraw(t *testing.T) {
 // dropping one.
 func TestOverviewSurvivesANarrowTerminal(t *testing.T) {
 	view := NewAnalyticsView()
-	view.setOverviewStatic("Акции  18 200  10.2%", "Энергетика  44 120", "за 11 дн.", "Текущая  500 000.00", "Доступный кэш  120 000.00", "LKOH  25 920")
+	view.setOverviewStatic("Акции  18 200  10.2%", "RUB  178 200  100.0%", "Энергетика  44 120", "за 11 дн.", "Текущая  500 000.00", "Доступный кэш  120 000.00", "LKOH  25 920")
 
 	drawAnalytics(t, view, 52, 24)
 
 	panels := map[string]*analyticsPanel{
 		"Структура":    view.Structure,
+		"Валюты":       view.Currencies,
 		"Секторы":      view.Sectors,
 		"Итог":         view.SinceOpen,
 		"Оценка":       view.Valuation,
@@ -219,7 +221,7 @@ func TestDistributeHeights(t *testing.T) {
 func TestPanelsNeverOverflowTheFrame(t *testing.T) {
 	view := NewAnalyticsView()
 	tall := strings.Repeat("строка\n", 12)
-	view.setOverviewStatic(tall, tall, tall, tall, tall, tall)
+	view.setOverviewStatic(tall, tall, tall, tall, tall, tall, tall)
 
 	const height = 18
 	drawAnalytics(t, view, 118, height)
@@ -230,6 +232,7 @@ func TestPanelsNeverOverflowTheFrame(t *testing.T) {
 
 	for name, panel := range map[string]*analyticsPanel{
 		"Структура":    view.Structure,
+		"Валюты":       view.Currencies,
 		"Секторы":      view.Sectors,
 		"Итог":         view.SinceOpen,
 		"Оценка":       view.Valuation,
@@ -254,7 +257,7 @@ func TestOverviewPanelsDoNotWrap(t *testing.T) {
 	view := NewAnalyticsView()
 
 	long := "Очень длинная строка, которая заведомо не помещается в узкую панель"
-	view.setOverviewStatic(long, "сектор", "итог", "оценка", "риск", "концентрация")
+	view.setOverviewStatic(long, "валюты", "сектор", "итог", "оценка", "риск", "концентрация")
 	drawAnalytics(t, view, 52, 24)
 
 	if got := panelHeight(view.Structure); got != 3 {

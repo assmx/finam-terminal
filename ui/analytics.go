@@ -5,6 +5,7 @@ import (
 
 	"finam-terminal/analytics"
 	"finam-terminal/api"
+	"finam-terminal/models"
 )
 
 // analyticsState is everything the Analytics tab remembers between draws.
@@ -18,6 +19,17 @@ type analyticsState struct {
 	period analytics.Preset
 
 	byAccount map[string]*analyticsAccountData
+
+	// fx is what the overview converts foreign holdings with. It is not per
+	// account: a rate is a rate whichever account asks, and switching accounts
+	// must not ask again.
+	fx fxState
+}
+
+// fxState holds the exchange rates the overview converts with, keyed by
+// currency code as GetFXRates returns them.
+type fxState struct {
+	rates map[string]models.FXRate
 }
 
 // analyticsAccountData is everything the tab remembers for one account.
@@ -47,6 +59,7 @@ func newAnalyticsState() *analyticsState {
 	return &analyticsState{
 		period:    analytics.DefaultPreset,
 		byAccount: make(map[string]*analyticsAccountData),
+		fx:        fxState{rates: make(map[string]models.FXRate)},
 	}
 }
 

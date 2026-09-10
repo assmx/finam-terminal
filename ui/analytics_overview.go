@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"finam-terminal/analytics"
 	"finam-terminal/models"
@@ -45,13 +46,15 @@ func (a *App) onAnalyticsTab() bool {
 	return a.portfolioView.TabbedView.ActiveTab == TabAnalytics
 }
 
-// updateAnalyticsOverview redraws the six overview panels.
+// updateAnalyticsOverview redraws the seven overview panels.
 //
 // It reads only state already in memory — positions and quotes from the same
 // five-second tick that feeds the Positions tab, the account's own valuation
-// and margin report, the instrument types from the startup asset cache and the
-// sectors from the index composition — and issues no request of its own. That
-// is what makes it safe to call on every tick.
+// and margin report, the instrument types from the startup asset cache, the
+// sectors from the index composition, the instruments' money facts from the
+// caches the lot resolution fills, and the rates the overview keeps — and
+// issues no request of its own. That is what makes it safe to call on every
+// tick; fetching rates and face currencies is scheduled elsewhere.
 //
 // What it hands each panel is a function rather than a string: the panel lays
 // its rows out to its own width, which tview only settles while drawing.
@@ -61,7 +64,7 @@ func updateAnalyticsOverview(app *App) {
 	app.dataMutex.RLock()
 	if app.selectedIdx < 0 || app.selectedIdx >= len(app.accounts) {
 		app.dataMutex.RUnlock()
-		view.setOverviewStatic(muted("Счёт не выбран"), "", "", "", "", "")
+		view.setOverviewStatic(muted("Счёт не выбран"), "", "", "", "", "", "")
 		return
 	}
 
@@ -69,21 +72,28 @@ func updateAnalyticsOverview(app *App) {
 	positions := app.positions[account.ID]
 	quotes := app.quotes[account.ID]
 	sectors, sectorsKnown, sectorNote := app.sectorMapLocked()
+	rates := app.fxRatesLocked()
 	app.dataMutex.RUnlock()
 
 	if account.LoadError != "" {
 		// Once at the top of each column, where the eye starts.
 		message := "[red]" + brokerDataError() + "[-]"
-		view.setOverviewStatic(message, "", "", message, "", "")
+		view.setOverviewStatic(message, "", "", "", message, "", "")
 		return
 	}
 
+	now := time.Now()
+	instruments := instrumentMoney(app, positions)
+
 	allocation := analytics.Structure(analytics.StructureInput{
-		Positions: positions,
-		Quotes:    quotes,
-		Cash:      account.Cash,
-		Types:     instrumentTypes(app, positions),
-		Sectors:   sectors,
+		Positions:   positions,
+		Quotes:      quotes,
+		Cash:        account.Cash,
+		Types:       instrumentTypes(app, positions),
+		Sectors:     sectors,
+		Instruments: instruments,
+		Rates:       rates,
+		Now:         now,
 	})
 
 	risk := analytics.RiskMetrics(analytics.RiskInput{
@@ -92,12 +102,15 @@ func updateAnalyticsOverview(app *App) {
 	})
 
 	worth := analytics.Valuation(analytics.ValuationInput{
-		Account:   account,
-		Positions: positions,
+		Account:     account,
+		Positions:   positions,
+		Instruments: instruments,
+		Rates:       rates,
 	})
 
 	view.setOverview(
 		func(w int) string { return renderStructure(allocation, w) },
+		func(w int) string { return renderCurrencies(allocation, now, w) },
 		func(w int) string { return renderSectors(allocation, sectorsKnown, sectorNote, w) },
 		app.sinceOpenSummaryRenderer(account),
 		func(w int) string { return renderValuation(worth, w) },
@@ -106,11 +119,12 @@ func updateAnalyticsOverview(app *App) {
 	)
 }
 
-// setOverview installs a renderer in each of the six panels — the left column
-// top to bottom, then the right — and resizes them to what they now hold, so
-// the frames follow the content rather than the other way round.
-func (av *AnalyticsView) setOverview(structure, sectors, sinceOpen, valuation, risk, concentration func(int) string) {
+// setOverview installs a renderer in each of the seven panels — the left
+// column top to bottom, then the right — and resizes them to what they now
+// hold, so the frames follow the content rather than the other way round.
+func (av *AnalyticsView) setOverview(structure, currencies, sectors, sinceOpen, valuation, risk, concentration func(int) string) {
 	av.Structure.SetRender(structure)
+	av.Currencies.SetRender(currencies)
 	av.Sectors.SetRender(sectors)
 	av.SinceOpen.SetRender(sinceOpen)
 	av.Valuation.SetRender(valuation)
@@ -120,15 +134,58 @@ func (av *AnalyticsView) setOverview(structure, sectors, sinceOpen, valuation, r
 
 // setOverviewStatic is setOverview for the states with nothing to lay out: no
 // account, or a broker that would not answer.
-func (av *AnalyticsView) setOverviewStatic(structure, sectors, sinceOpen, valuation, risk, concentration string) {
+func (av *AnalyticsView) setOverviewStatic(structure, currencies, sectors, sinceOpen, valuation, risk, concentration string) {
 	av.setOverview(
 		func(int) string { return structure },
+		func(int) string { return currencies },
 		func(int) string { return sectors },
 		func(int) string { return sinceOpen },
 		func(int) string { return valuation },
 		func(int) string { return risk },
 		func(int) string { return concentration },
 	)
+}
+
+// fxRatesLocked copies the rates the overview converts with. The caller must
+// hold the read lock; the copy is what lets the calculation run after it is
+// released.
+func (a *App) fxRatesLocked() map[string]models.FXRate {
+	rates := make(map[string]models.FXRate, len(a.analytics.fx.rates))
+	for code, rate := range a.analytics.fx.rates {
+		rates[code] = rate
+	}
+	return rates
+}
+
+// instrumentMoney gathers what the API caches know about each held
+// instrument's money: its currency and a bond's face (GetAsset), the per-piece
+// value (GetAssetParams), and a face currency a calendar named. All three are
+// memory reads filled by requests the terminal already makes, so this stays
+// free on a tick.
+func instrumentMoney(app *App, positions []models.Position) map[string]analytics.Instrument {
+	if app.client == nil || len(positions) == 0 {
+		return nil
+	}
+
+	instruments := make(map[string]analytics.Instrument, len(positions))
+	for _, p := range positions {
+		var inst analytics.Instrument
+		if cur, ok := app.client.GetInstrumentCurrency(p.Symbol); ok {
+			inst.Quote = cur.Quote
+			inst.FaceValue = cur.FaceValue
+		}
+		if unit, ok := app.client.GetUnitValue(p.Symbol); ok {
+			inst.Unit = unit
+		}
+		if inst.FaceValue > 0 {
+			if face, ok := app.client.BondFaceCurrencyCached(p.Symbol); ok {
+				inst.Face = face
+				inst.FaceChecked = true
+			}
+		}
+		instruments[p.Symbol] = inst
+	}
+	return instruments
 }
 
 // sectorMapLocked builds the symbol → sector map from the index composition,
@@ -203,6 +260,83 @@ func renderStructure(a analytics.Allocation, width int) string {
 	}
 
 	return b.String()
+}
+
+// unresolvedFaceLabel names the row of bonds whose face is in another
+// currency than they settle in, while the calendar that names it is awaited.
+const unresolvedFaceLabel = "номинал в валюте"
+
+// renderCurrencies draws the breakdown by currency: one row per currency with
+// its share of the same base the structure uses, then a grey line for each
+// foreign currency with its amount in its own money, the rate and when the rate
+// was quoted, then the currencies without a rate in yellow, and the counters of
+// anything whose currency is not settled.
+func renderCurrencies(a analytics.Allocation, now time.Time, width int) string {
+	if len(a.Currencies) == 0 {
+		return muted("нет активов") + "\n"
+	}
+
+	var b strings.Builder
+
+	// The share rows first, as one block, so their bars line up.
+	for _, row := range a.Currencies {
+		switch {
+		case row.Unresolved:
+			fmt.Fprintf(&b, "%s\n", shareRow(unresolvedFaceLabel, row.Value, row.Share, width))
+		case row.HasRate:
+			fmt.Fprintf(&b, "%s\n", shareRow(row.Currency, row.Value, row.Share, width))
+		}
+	}
+
+	for _, row := range a.Currencies {
+		switch {
+		case row.Unresolved:
+			b.WriteString(muted("валюта номинала уточняется") + "\n")
+		case !row.HasRate:
+			fmt.Fprintf(&b, "[yellow]%s %s — нет курса[-]\n", tview.Escape(row.Currency), formatNumber(row.Native, 2))
+		case row.Currency != a.BaseCurrency:
+			b.WriteString(currencyDetail(row, now) + "\n")
+		}
+	}
+
+	if a.UnknownCurrencyCount > 0 {
+		fmt.Fprintf(&b, "[yellow]валюта неизвестна: %d[-]\n", a.UnknownCurrencyCount)
+	}
+	if a.FaceUncheckedCount > 0 {
+		fmt.Fprintf(&b, "[yellow]валюта номинала не проверена: %d[-]\n", a.FaceUncheckedCount)
+	}
+
+	return b.String()
+}
+
+// currencyDetail is the grey line under the rows for one foreign currency: the
+// amount in its own money, the rate that converted it and the rate's time.
+func currencyDetail(row analytics.CurrencyRow, now time.Time) string {
+	line := muted(fmt.Sprintf("%s %s × %.4f", tview.Escape(row.Currency), formatNumber(row.Native, 2), row.Rate.Value))
+	if label := rateTimeLabel(row.Rate.At, now); label != "" {
+		line += muted(" · ") + label
+	}
+	return line
+}
+
+// rateTimeLabel says when a rate was quoted: the time alone for today, with the
+// date for another day, and in yellow as "курс на …" once it is too old to
+// pass for current — a weekend rate must not read as this morning's. A rate
+// without a time gets no label.
+func rateTimeLabel(at, now time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	local := at.Local()
+	if analytics.RateIsStale(at, now) {
+		return "[yellow]курс на " + local.Format("02.01 15:04") + "[-]"
+	}
+	y1, m1, d1 := local.Date()
+	y2, m2, d2 := now.Local().Date()
+	if y1 == y2 && m1 == m2 && d1 == d2 {
+		return muted(local.Format("15:04"))
+	}
+	return muted(local.Format("02.01 15:04"))
 }
 
 // totalRow is a label on the left and its figure hard against the right edge —
@@ -289,15 +423,8 @@ func renderRisk(account models.AccountInfo, r analytics.Risk, a analytics.Alloca
 	// indent to match and every value in the panel ends in the same place.
 	rowWidth := width - 2
 
-	// Money the shares cannot include — there are no exchange rates to convert
-	// it — but money the account holds all the same.
-	for _, c := range a.ForeignCash {
-		fmt.Fprintf(&b, "  %s\n", leaderRow(
-			"остаток "+tview.Escape(c.Currency),
-			formatNumber(c.Amount, 2),
-			rowWidth))
-	}
-
+	// A balance in another currency is shown once, in the currency panel; a
+	// loan in one stays here, because it is a risk rather than a holding.
 	for _, c := range a.Borrowed {
 		fmt.Fprintf(&b, "  %s\n", leaderRow(
 			fmt.Sprintf("[red]заём %s[-]", tview.Escape(c.Currency)),

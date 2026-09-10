@@ -375,21 +375,6 @@ func TestOverview_CurrentValueShownOnce(t *testing.T) {
 	}
 }
 
-// TestOverview_RiskShowsForeignCash: a balance in another currency cannot join
-// the shares, but it is money the account holds and must stay visible.
-func TestOverview_RiskShowsForeignCash(t *testing.T) {
-	account := mcTestAccount()
-	account.Cash = append(account.Cash, models.CashBalance{Currency: "USD", Amount: 500})
-	app := overviewApp(typeMock(), account)
-	seedPositions(app)
-
-	updateAnalyticsOverview(app)
-
-	if line := lineWith(riskText(app), "остаток USD"); !strings.Contains(line, "500.00") {
-		t.Errorf("foreign cash row = %q, want USD 500.00", line)
-	}
-}
-
 // TestOverview_RiskShowsFortsMarginOnUnifiedAccount: on a unified (MC) account
 // the collateral held for FORTS positions shows nowhere in the account's own
 // report, so it is summed from the positions that carry it.
