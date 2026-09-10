@@ -14,7 +14,7 @@
   - Acceptance: тесты зелёные
 - [x] Task: (Red→Green) Курсы через `LastQuote` (решение разведки): `models.FXRate`, `fxSymbols` по таблице spec (переменная пакета, множитель котировки), `last`→`close`, отбраковка нечитаемого, неположительного и старше `fxRateMaxAge`; `Client.GetFXRates(currencies)` вызывает `lastQuote` напрямую, **без разрешения лота** (счётчики `GetAsset`/`GetAssetParams` мока не растут), свой дедлайн на вызов, обрыв пачки на `ResourceExhausted`; фикстуры котировок курсов (живая, замороженная, за 100 единиц) и счётчики в `MockMarketDataServer`; юнит- и интеграционные тесты: валюта вне таблицы, пустая котировка, замороженная котировка, множитель, лимит (58e0c60)
   - Acceptance: тесты зелёные
-- [~] Task: `ui.APIClient` + мок-клиент ui-тестов: `GetInstrumentCurrency`, `GetUnitValue`, `GetBondFaceCurrency`, `BondFaceCurrencyCached`, `GetFXRates`, счётчики вызовов
+- [x] Task: `ui.APIClient` + мок-клиент ui-тестов: `GetInstrumentCurrency`, `GetUnitValue`, `GetBondFaceCurrency`, `BondFaceCurrencyCached`, `GetFXRates`, счётчики вызовов (1b768e4)
   - Acceptance: `go build ./... && go vet ./...` чистые; существующие ui-тесты зелёные
 
 ## Phase 3: Пакет analytics — валюты
