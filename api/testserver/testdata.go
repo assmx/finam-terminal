@@ -147,7 +147,41 @@ func DefaultQuote(symbol string) *marketdata.Quote {
 	if q, ok := quotes[symbol]; ok {
 		return q
 	}
+	if q, ok := fxQuotes()[symbol]; ok {
+		return q
+	}
 	return nil
+}
+
+// fxQuotes are currency-pair quotes shaped like the answers of 2026-09-10:
+// live pairs with a recent timestamp — KZT quoted per 100 units — and one
+// frozen EUR pair that still answers with its January 2025 price, which is how
+// every EUR pair on MISX looked. Built on each call so "recent" stays recent.
+func fxQuotes() map[string]*marketdata.Quote {
+	recent := timestamppb.New(time.Now().Add(-time.Minute))
+	return map[string]*marketdata.Quote{
+		"USD000UTSTOM@MISX": {
+			Symbol: "USD000UTSTOM@MISX", Timestamp: recent,
+			Last: &decimal.Decimal{Value: "84.26"}, Close: &decimal.Decimal{Value: "85.1675"},
+		},
+		"CNYRUB_TOM@MISX": {
+			Symbol: "CNYRUB_TOM@MISX", Timestamp: recent,
+			Last: &decimal.Decimal{Value: "12.53"}, Close: &decimal.Decimal{Value: "12.665"},
+		},
+		"EURRUB@#WWCP": {
+			Symbol: "EURRUB@#WWCP", Timestamp: recent,
+			Last: &decimal.Decimal{Value: "97.634"}, Close: &decimal.Decimal{Value: "98.874"},
+		},
+		"KZTRUB_TOM@MISX": {
+			Symbol: "KZTRUB_TOM@MISX", Timestamp: recent,
+			Last: &decimal.Decimal{Value: "19.11"}, Close: &decimal.Decimal{Value: "19.1975"},
+		},
+		"EUR_RUB__TOM@MISX": {
+			Symbol:    "EUR_RUB__TOM@MISX",
+			Timestamp: timestamppb.New(time.Date(2025, 1, 9, 7, 0, 3, 0, time.UTC)),
+			Last:      &decimal.Decimal{Value: "95.62"}, Close: &decimal.Decimal{Value: "95.62"},
+		},
+	}
 }
 
 // DefaultStreamQuote returns a quote as SubscribeQuote would deliver it. A

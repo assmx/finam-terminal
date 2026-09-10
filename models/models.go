@@ -219,6 +219,20 @@ type UnitValue struct {
 	Value    float64
 }
 
+// FXRate is the price of one unit of a currency in roubles, read from the
+// quote of its pair to the rouble.
+//
+// Every pair the terminal reads is quoted against the rouble, so Rate is
+// always roubles per unit; the analytics layer derives a cross rate for an
+// account whose base currency is something else. At is the time of the quote
+// the rate came from — the last trade, which after the close can be hours old
+// — and zero when the broker sent none.
+type FXRate struct {
+	Currency string
+	Rate     float64
+	At       time.Time
+}
+
 // TradingSession represents a single trading session window
 type TradingSession struct {
 	Type      string
