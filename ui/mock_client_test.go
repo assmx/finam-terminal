@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -72,6 +73,89 @@ type mockClient struct {
 	GetDividendsCalls  atomic.Int64
 	GetSplitsCalls     atomic.Int64
 	GetBondEventsCalls atomic.Int64
+
+	// Currency. The three reads are free in the real client; the two lookups
+	// are not, and their counters carry the currency budget: one rate per
+	// currency per TTL, none for a rouble account, no calendar for an
+	// ordinary bond, and nothing at all on a redraw.
+	GetInstrumentCurrencyFunc  func(symbol string) (models.InstrumentCurrency, bool)
+	GetUnitValueFunc           func(symbol string) (models.UnitValue, bool)
+	BondFaceCurrencyCachedFunc func(symbol string) (string, bool)
+	GetBondFaceCurrencyFunc    func(symbol string) (string, error)
+	GetFXRatesFunc             func(currencies []string) (map[string]models.FXRate, error)
+	GetBondFaceCurrencyCalls   atomic.Int64
+	GetFXRatesCalls            atomic.Int64
+
+	currencyMu     sync.Mutex
+	fxRatesAsked   map[string]int
+	faceLookupsFor map[string]int
+}
+
+// FXRatesAskedFor reports how many GetFXRates calls included currency.
+func (m *mockClient) FXRatesAskedFor(currency string) int {
+	m.currencyMu.Lock()
+	defer m.currencyMu.Unlock()
+	return m.fxRatesAsked[currency]
+}
+
+// FaceLookupsFor reports how many GetBondFaceCurrency calls asked for symbol.
+func (m *mockClient) FaceLookupsFor(symbol string) int {
+	m.currencyMu.Lock()
+	defer m.currencyMu.Unlock()
+	return m.faceLookupsFor[symbol]
+}
+
+func (m *mockClient) GetInstrumentCurrency(symbol string) (models.InstrumentCurrency, bool) {
+	if m.GetInstrumentCurrencyFunc != nil {
+		return m.GetInstrumentCurrencyFunc(symbol)
+	}
+	return models.InstrumentCurrency{}, false
+}
+
+func (m *mockClient) GetUnitValue(symbol string) (models.UnitValue, bool) {
+	if m.GetUnitValueFunc != nil {
+		return m.GetUnitValueFunc(symbol)
+	}
+	return models.UnitValue{}, false
+}
+
+func (m *mockClient) BondFaceCurrencyCached(symbol string) (string, bool) {
+	if m.BondFaceCurrencyCachedFunc != nil {
+		return m.BondFaceCurrencyCachedFunc(symbol)
+	}
+	return "", false
+}
+
+func (m *mockClient) GetBondFaceCurrency(symbol string) (string, error) {
+	m.GetBondFaceCurrencyCalls.Add(1)
+	m.currencyMu.Lock()
+	if m.faceLookupsFor == nil {
+		m.faceLookupsFor = make(map[string]int)
+	}
+	m.faceLookupsFor[symbol]++
+	m.currencyMu.Unlock()
+
+	if m.GetBondFaceCurrencyFunc != nil {
+		return m.GetBondFaceCurrencyFunc(symbol)
+	}
+	return "", nil
+}
+
+func (m *mockClient) GetFXRates(currencies []string) (map[string]models.FXRate, error) {
+	m.GetFXRatesCalls.Add(1)
+	m.currencyMu.Lock()
+	if m.fxRatesAsked == nil {
+		m.fxRatesAsked = make(map[string]int)
+	}
+	for _, c := range currencies {
+		m.fxRatesAsked[c]++
+	}
+	m.currencyMu.Unlock()
+
+	if m.GetFXRatesFunc != nil {
+		return m.GetFXRatesFunc(currencies)
+	}
+	return map[string]models.FXRate{}, nil
 }
 
 func (m *mockClient) LoadHistory(ctx context.Context, req api.HistoryRequest, progress func(api.HistoryProgress)) (*api.HistoryBundle, error) {

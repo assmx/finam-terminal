@@ -63,6 +63,18 @@ type APIClient interface {
 	// and issues no request, so the overview may call it on every tick.
 	GetInstrumentType(symbol string) string
 
+	// Currency. GetInstrumentCurrency, GetUnitValue and BondFaceCurrencyCached
+	// are pure cache reads filled by requests the terminal already makes (lot
+	// resolution, instrument profile, the payout calendars), so the overview
+	// may call them on every tick. GetBondFaceCurrency may cost a calendar
+	// request and GetFXRates one LastQuote per currency: both run off the
+	// event loop, on a schedule, and never on a redraw.
+	GetInstrumentCurrency(symbol string) (models.InstrumentCurrency, bool)
+	GetUnitValue(symbol string) (models.UnitValue, bool)
+	BondFaceCurrencyCached(symbol string) (string, bool)
+	GetBondFaceCurrency(symbol string) (string, error)
+	GetFXRates(currencies []string) (map[string]models.FXRate, error)
+
 	// Corporate action calendars. Cached per symbol for a day, so a repeat
 	// lookup inside that window costs no request.
 	GetDividends(symbol string) ([]models.Dividend, error)
