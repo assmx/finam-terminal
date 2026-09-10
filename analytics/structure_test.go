@@ -309,7 +309,8 @@ func TestStructure_ForeignCashReported(t *testing.T) {
 }
 
 // TestStructure_ForeignPositionsExcluded drops a position whose currency is
-// known to differ from the base and reports how many were left out.
+// known to differ from the base and has no rate, and reports how many were
+// left out.
 func TestStructure_ForeignPositionsExcluded(t *testing.T) {
 	got := Structure(StructureInput{
 		Positions: []models.Position{
@@ -320,15 +321,15 @@ func TestStructure_ForeignPositionsExcluded(t *testing.T) {
 			pos("MYSTERY@MISX", "1", "100"),
 		},
 		Types: map[string]string{"SBER@MISX": "EQUITIES"},
-		Currencies: map[string]string{
-			"SBER@MISX": "RUB",
-			"AAPL@XNAS": "USD",
+		Instruments: map[string]Instrument{
+			"SBER@MISX": {Quote: "RUB"},
+			"AAPL@XNAS": {Quote: "USD"},
 		},
 		Cash: []models.CashBalance{{Currency: "RUB", Amount: 0}},
 	})
 
-	if got.ForeignCount != 1 {
-		t.Errorf("ForeignCount = %d, want 1", got.ForeignCount)
+	if got.NoRateCount != 1 {
+		t.Errorf("NoRateCount = %d, want 1", got.NoRateCount)
 	}
 	if math.Abs(got.Base-2900) > 1e-9 {
 		t.Errorf("Base = %v, want 2900 (2800 + 100, without the USD position)", got.Base)

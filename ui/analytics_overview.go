@@ -198,8 +198,8 @@ func renderStructure(a analytics.Allocation, width int) string {
 	if a.Skipped > 0 {
 		fmt.Fprintf(&b, "[yellow]без цены: %d[-]\n", a.Skipped)
 	}
-	if a.ForeignCount > 0 {
-		fmt.Fprintf(&b, "[yellow]в других валютах: %d[-]\n", a.ForeignCount)
+	if a.NoRateCount > 0 {
+		fmt.Fprintf(&b, "[yellow]в других валютах: %d[-]\n", a.NoRateCount)
 	}
 
 	return b.String()
