@@ -109,7 +109,6 @@ func (a *App) SetAnalyticsScreen(screen AnalyticsScreen) {
 		updateAnalyticsOverview(a)
 	case AnalyticsTrades, AnalyticsMoney:
 		a.ensureHistoryLoaded()
-		a.updateAnalyticsHistoryStatus()
 		updateAnalyticsHistoryScreens(a)
 	case AnalyticsPayouts:
 		a.ensurePayoutsLoaded()

@@ -350,7 +350,7 @@ func TestHistory_PartialDataStays(t *testing.T) {
 
 	// The tview event loop is not running under test, so the queued redraw
 	// never fires; run it the way the loop would.
-	app.updateAnalyticsHistoryStatus()
+	updateAnalyticsHistoryScreens(app)
 	status := app.analyticsView().TradeStatus.GetText(true)
 	if !strings.Contains(status, "лимит") {
 		t.Errorf("status = %q, want it to name the rate limit", status)
@@ -371,7 +371,7 @@ func TestHistory_IncompleteIsMarked(t *testing.T) {
 	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
 	waitHistory(t, app, mock, 1)
 
-	app.updateAnalyticsHistoryStatus()
+	updateAnalyticsHistoryScreens(app)
 	status := app.analyticsView().TradeStatus.GetText(true)
 	if !strings.Contains(status, "12.05.2024") {
 		t.Errorf("status = %q, want it to name the date history starts from", status)
@@ -390,7 +390,7 @@ func TestHistory_ErrorShowsRetryHint(t *testing.T) {
 	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
 	waitHistory(t, app, mock, 1)
 
-	app.updateAnalyticsHistoryStatus()
+	updateAnalyticsHistoryScreens(app)
 	status := app.analyticsView().TradeStatus.GetText(true)
 	if !strings.Contains(status, "R") {
 		t.Errorf("status = %q, want the retry hint", status)
@@ -409,7 +409,7 @@ func TestHistory_QuotaBlockIsExplained(t *testing.T) {
 	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
 	waitHistory(t, app, mock, 1)
 
-	app.updateAnalyticsHistoryStatus()
+	updateAnalyticsHistoryScreens(app)
 	if status := app.analyticsView().TradeStatus.GetText(true); !strings.Contains(status, "квот") {
 		t.Errorf("status = %q, want it to explain the quota refusal", status)
 	}

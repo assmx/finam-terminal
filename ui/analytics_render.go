@@ -110,7 +110,16 @@ type AnalyticsView struct {
 	PayoutTable  *tview.Table
 	PayoutStatus *tview.TextView
 	payouts      *analyticsStack
+
+	// LoadBar stands in for the whole Trades or Money screen while the active
+	// account's history loads. historyLoading is whether it should: the
+	// screens decide it from the account on screen at every redraw.
+	LoadBar        *historyLoadBar
+	historyLoading bool
 }
+
+// loadingPage is the Pages entry holding the history progress bar.
+const loadingPage = "history_loading"
 
 // NewAnalyticsView builds the tab.
 func NewAnalyticsView() *AnalyticsView {
@@ -136,6 +145,7 @@ func NewAnalyticsView() *AnalyticsView {
 		PayoutTotals:   createAnalyticsPanel(" Ожидаемые выплаты "),
 		PayoutTable:    createAnalyticsTable(" По датам "),
 		PayoutStatus:   createAnalyticsStatus(),
+		LoadBar:        newHistoryLoadBar(),
 	}
 
 	// The currency breakdown sits under the one by type: both cut the same
@@ -193,6 +203,7 @@ func NewAnalyticsView() *AnalyticsView {
 	av.Pages.AddPage("trades", av.trades, true, false)
 	av.Pages.AddPage("money", av.money, true, false)
 	av.Pages.AddPage("payouts", av.payouts, true, false)
+	av.Pages.AddPage(loadingPage, av.LoadBar, true, false)
 
 	// The tab as a whole is framed like every other section of the terminal —
 	// same border, same title, and the same double rule when it holds focus.
@@ -362,8 +373,38 @@ func (av *AnalyticsView) SetScreen(screen AnalyticsScreen) {
 	for _, s := range analyticsScreens {
 		if s.Screen == screen {
 			av.ActiveScreen = screen
-			av.Pages.SwitchToPage(s.Page)
+			av.showActivePage()
 			av.updateHeader()
+			return
+		}
+	}
+}
+
+// SetHistoryLoad puts the progress bar in place of the Trades and Money
+// screens while the account on screen loads its history, or puts the screens
+// back. The other two sub-screens are not the history's to cover.
+func (av *AnalyticsView) SetHistoryLoad(loading bool, fraction float64) {
+	av.historyLoading = loading
+	av.LoadBar.SetFraction(fraction)
+	av.showActivePage()
+}
+
+// ShowsLoadBar reports whether the progress bar is what the tab shows now.
+func (av *AnalyticsView) ShowsLoadBar() bool {
+	return av.historyLoading &&
+		(av.ActiveScreen == AnalyticsTrades || av.ActiveScreen == AnalyticsMoney)
+}
+
+// showActivePage brings up the active sub-screen, or the bar standing in for
+// it.
+func (av *AnalyticsView) showActivePage() {
+	if av.ShowsLoadBar() {
+		av.Pages.SwitchToPage(loadingPage)
+		return
+	}
+	for _, s := range analyticsScreens {
+		if s.Screen == av.ActiveScreen {
+			av.Pages.SwitchToPage(s.Page)
 			return
 		}
 	}
@@ -372,7 +413,14 @@ func (av *AnalyticsView) SetScreen(screen AnalyticsScreen) {
 // Focusable returns the primitive that should hold focus on the current
 // sub-screen. A table sub-screen takes focus itself so ↑/↓ scroll it; the
 // overview has nothing to scroll and keeps focus on its container.
+//
+// While the progress bar stands in for a screen, the bar takes focus: the
+// table behind it is hidden but can still be full — during R it is — and
+// Enter or A reaching it would act on a row nobody can see.
 func (av *AnalyticsView) Focusable() tview.Primitive {
+	if av.ShowsLoadBar() {
+		return av.LoadBar
+	}
 	switch av.ActiveScreen {
 	case AnalyticsTrades:
 		return av.TradesTable
@@ -485,11 +533,6 @@ func newHistoryLoadBar() *historyLoadBar {
 // SetFraction sets how much of the pass is done, 0..1.
 func (b *historyLoadBar) SetFraction(fraction float64) {
 	b.fraction = fraction
-}
-
-// Fraction is how much of the pass the bar shows as done.
-func (b *historyLoadBar) Fraction() float64 {
-	return b.fraction
 }
 
 // Draw paints the background, then the bar across the middle row. The width

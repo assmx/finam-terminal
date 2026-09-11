@@ -132,7 +132,7 @@ func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 	if req.TradesFrom.IsZero() && req.TransactionsFrom.IsZero() {
 		// Nothing is known about when this account's history starts, so there
 		// is no window to walk. The screens say so.
-		a.setHistoryStatus("[yellow]нет данных о начале истории счёта[-]")
+		a.setHistoryStatus(noHistoryStartText)
 		return
 	}
 
@@ -147,21 +147,23 @@ func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 	data.load = historyLoad{}
 	a.dataMutex.Unlock()
 
-	a.updateAnalyticsHistoryStatus()
+	// The bar goes up at once, empty: the first report may be a quota check
+	// and a request away.
+	updateAnalyticsHistoryScreens(a)
 
 	go func() {
 		bundle, err := a.client.LoadHistory(a.ctx, req, func(p api.HistoryProgress) {
 			a.dataMutex.Lock()
 			data.load.windows, data.load.windowTotal = p.Done, p.Total
 			a.dataMutex.Unlock()
-			a.queueDraw(func() { a.updateAnalyticsHistoryStatus() })
+			a.queueDraw(func() { updateAnalyticsHistoryScreens(a) })
 		})
 
 		benchmark, benchmarkOK := a.loadBenchmark(account.ID, req, bundle, func() {
 			a.dataMutex.Lock()
 			data.load.bars++
 			a.dataMutex.Unlock()
-			a.queueDraw(func() { a.updateAnalyticsHistoryStatus() })
+			a.queueDraw(func() { updateAnalyticsHistoryScreens(a) })
 		})
 
 		a.dataMutex.Lock()
@@ -183,10 +185,7 @@ func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 			log.Printf("[WARN] Failed to load history for %s: %v", account.ID, err)
 		}
 
-		a.queueDraw(func() {
-			a.updateAnalyticsHistoryStatus()
-			updateAnalyticsHistoryScreens(a)
-		})
+		a.queueDraw(func() { updateAnalyticsHistoryScreens(a) })
 	}()
 }
 
@@ -385,6 +384,30 @@ func formatHistoryDate(t time.Time) string {
 	return t.Local().Format("02.01.2006")
 }
 
+// noHistoryStartText is the status line of an account whose history start the
+// broker has not reported: there is no window to walk.
+const noHistoryStartText = "[yellow]нет данных о начале истории счёта[-]"
+
+// hasHistoryStart reports whether the broker has said when the account's
+// history begins. Without either date a full pass has nothing to walk.
+func hasHistoryStart(account models.AccountInfo) bool {
+	return !account.FirstTradeDate.IsZero() || !account.FirstNonTradeDate.IsZero()
+}
+
+// historyStatusLine is the status line for the account on screen: the settled
+// state of its cache or, with nothing loaded and no history start reported,
+// why nothing will load. It is derived on every redraw, so entering a screen
+// cannot wipe it the way a line written once by the loader was wiped.
+func historyStatusLine(account models.AccountInfo, data analyticsAccountData) string {
+	if text := historyStatusText(data); text != "" {
+		return text
+	}
+	if data.history == nil && !hasHistoryStart(account) {
+		return noHistoryStartText
+	}
+	return ""
+}
+
 // setHistoryStatus writes one line to both history screens.
 func (a *App) setHistoryStatus(text string) {
 	view := a.analyticsView()
@@ -392,13 +415,18 @@ func (a *App) setHistoryStatus(text string) {
 	view.MoneyStatus.SetText(text)
 }
 
-// updateAnalyticsHistoryStatus redraws the status line of both screens from
-// the active account's cache.
-func (a *App) updateAnalyticsHistoryStatus() {
-	_, data, ok := a.analyticsAccountSnapshot()
-	if !ok {
-		a.setHistoryStatus("")
-		return
+// showHistoryLoad puts the progress bar up in place of the Trades and Money
+// screens, or takes it down, and moves focus with it.
+//
+// Focus moves only when the change would strand it: on the screen the bar now
+// covers, or on the bar being taken away. A search window, a profile or a
+// modal opened while the pass ran keeps its focus; closing it hands focus to
+// whatever the tab shows by then.
+func (a *App) showHistoryLoad(loading bool, fraction float64) {
+	view := a.analyticsView()
+	before := view.Focusable()
+	view.SetHistoryLoad(loading, fraction)
+	if after := view.Focusable(); after != before && a.app.GetFocus() == before {
+		a.app.SetFocus(after)
 	}
-	a.setHistoryStatus(historyStatusText(data))
 }

@@ -51,13 +51,28 @@ func (a *App) analyticsWindow(account models.AccountInfo) (time.Time, time.Time)
 }
 
 // updateAnalyticsHistoryScreens redraws everything that reads the history
-// cache. It issues no request: the whole point of loading a full pass once is
-// that every period afterwards is a filter over memory.
+// cache, from one snapshot of the account on screen: the progress bar while
+// that account's pass runs, the status line and both screens otherwise.
+//
+// Every redraw goes through here — entering a screen, a progress report, the
+// end of a pass, a period change — so what the screens show is always decided
+// by the account they are showing: a report from another account's pass cannot
+// put its bar over this one. It issues no request: the whole point of loading a
+// full pass once is that every period afterwards is a filter over memory.
 func updateAnalyticsHistoryScreens(a *App) {
 	account, data, ok := a.analyticsAccountSnapshot()
 	if !ok {
+		a.setHistoryStatus("")
+		a.showHistoryLoad(false, 0)
 		return
 	}
+	if data.loading {
+		// The bar is the whole screen; what is behind it waits for the pass.
+		a.showHistoryLoad(true, historyLoadFraction(data.load))
+		return
+	}
+
+	a.setHistoryStatus(historyStatusLine(account, data))
 
 	from, to := a.analyticsWindow(account)
 	currency := analyticsBaseCurrency(account)
@@ -70,6 +85,8 @@ func updateAnalyticsHistoryScreens(a *App) {
 	renderTradeStats(a.analyticsView(), data.history, fifo, from, to, currency)
 	a.analyticsView().fitTradesTable(renderTradeTable(a.analyticsView().TradesTable, fifo, from, to))
 	renderMoneyScreen(a, account, data, fifo, from, to, currency)
+
+	a.showHistoryLoad(false, 0)
 }
 
 // Detail and tile geometry.
