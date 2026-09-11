@@ -18,6 +18,7 @@ import (
 	"google.golang.org/genproto/googleapis/type/interval"
 	"google.golang.org/genproto/googleapis/type/money"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -62,6 +63,10 @@ type Client struct {
 	tradeLotCache       map[string]float64 // ticker -> trade lot size (GetAssetParams.trade_lot_size); 0 = checked, API has none
 	assetTypeCache      map[string]string  // ticker or symbol -> Asset.Type, from the bulk list
 	instrumentNameCache map[string]string  // ticker or symbol -> human-readable name
+	// Tickers GetAsset refused for want of a MIC, with the time of the refusal.
+	// The same MIC-less request would get the same answer on every refresh, so
+	// the lot resolution does not ask about them for refusedSymbolTTL.
+	refusedSymbolCache map[string]time.Time
 	// Money facts filed from answers the terminal already receives: GetAsset
 	// (for the lot and the profile) and GetAssetParams (for the trade lot).
 	// Present means the broker answered, even if it named nothing.
@@ -424,7 +429,15 @@ func (c *Client) getFullSymbol(ticker string, accountID string) string {
 		c.assetMutex.RUnlock()
 		return fullSymbol
 	}
+	refused := c.symbolRefusedLocked(ticker)
 	c.assetMutex.RUnlock()
+
+	// The broker has already refused this ticker for carrying no MIC. Asking
+	// again would send the same request and get the same answer, once per
+	// refresh tick.
+	if refused {
+		return ticker
+	}
 
 	// Fallback: Fetch specific asset from API
 	log.Printf("[DEBUG] Cache miss (symbol or lot) for ticker: %s. hasSymbol=%v, hasLot=%v, hasTradeLot=%v", ticker, hasSymbol, hasLot, hasTradeLot)
@@ -453,6 +466,11 @@ func (c *Client) getFullSymbol(ticker string, accountID string) string {
 	return resolved
 }
 
+// refusedSymbolTTL is how long a ticker GetAsset refused for want of a MIC is
+// not asked about again. A variable rather than a constant so tests can expire
+// it.
+var refusedSymbolTTL = 24 * time.Hour
+
 // resolveAssetLot fetches an instrument via GetAsset and caches its MIC and
 // asset lot size. It returns the resolved full symbol, or "" when the asset
 // could not be resolved.
@@ -467,6 +485,15 @@ func (c *Client) resolveAssetLot(ticker, fetchSymbol, accountID string) string {
 	})
 	if err != nil {
 		c.logGRPCError("AssetsService", "GetAsset", err, fmt.Sprintf("Symbol: %s", fetchSymbol), fmt.Sprintf("AccountId: %s", accountID))
+		// InvalidArgument is the broker saying the request itself is wrong, and
+		// for a symbol without a MIC it is wrong by construction: the live API
+		// answers "Mic must not be empty" (FXRL, RU000A10AA02, 2026-09-10).
+		// Anything else — Unavailable, a deadline — may pass, so it is not
+		// remembered and the next miss asks again.
+		if status.Code(err) == codes.InvalidArgument && !strings.Contains(fetchSymbol, "@") {
+			c.markSymbolRefused(ticker)
+			log.Printf("[WARN] GetAsset refused %s for carrying no MIC; not asked again for %v", ticker, refusedSymbolTTL)
+		}
 		return ""
 	}
 
@@ -611,6 +638,24 @@ func (c *Client) storeTradeLotSize(fullSymbol string, lotSize float64) {
 	if ticker, _, found := strings.Cut(fullSymbol, "@"); found && ticker != "" {
 		c.tradeLotCache[ticker] = lotSize
 	}
+}
+
+// markSymbolRefused files a ticker GetAsset refused for carrying no MIC.
+func (c *Client) markSymbolRefused(ticker string) {
+	c.assetMutex.Lock()
+	defer c.assetMutex.Unlock()
+
+	if c.refusedSymbolCache == nil {
+		c.refusedSymbolCache = make(map[string]time.Time)
+	}
+	c.refusedSymbolCache[ticker] = time.Now()
+}
+
+// symbolRefusedLocked reports whether GetAsset refused a ticker for carrying no
+// MIC within the last refusedSymbolTTL. The caller must hold assetMutex.
+func (c *Client) symbolRefusedLocked(ticker string) bool {
+	at, ok := c.refusedSymbolCache[ticker]
+	return ok && time.Since(at) < refusedSymbolTTL
 }
 
 // lotSizeLocked resolves the lot size for a ticker or full symbol. The trade lot
