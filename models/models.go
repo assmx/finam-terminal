@@ -76,6 +76,12 @@ type Position struct {
 	// position. It is filled for FORTS positions only; every other position
 	// carries "N/A", which means "not reported" rather than zero.
 	MaintenanceMargin string
+
+	// Blocked says the broker holds the position on a blocked venue and values
+	// it at zero: it is not in the account's equity, and asking about it hangs
+	// (LastQuote, GetAssetParams) or silences a quote subscription. The API
+	// layer sets it from the bulk asset list, never from a request.
+	Blocked bool
 }
 
 // GetCloseDirection returns the inverse direction needed to close the position.

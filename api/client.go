@@ -67,6 +67,9 @@ type Client struct {
 	// The same MIC-less request would get the same answer on every refresh, so
 	// the lot resolution does not ask about them for refusedSymbolTTL.
 	refusedSymbolCache map[string]time.Time
+	// Instruments the bulk list files on a blocked venue, keyed by the ticker a
+	// position of them carries (FXRL for FXRL.MMBZ@_MMBZ). See blocked.go.
+	blockedTwinCache map[string]blockedTwin
 	// Money facts filed from answers the terminal already receives: GetAsset
 	// (for the lot and the profile) and GetAssetParams (for the trade lot).
 	// Present means the broker answered, even if it named nothing.
@@ -394,15 +397,28 @@ func (c *Client) loadAssetCache() error {
 			Name:   asset.Name,
 			Type:   asset.Type,
 		})
+
+		// A blocked instrument's twin is what recognises a position the broker
+		// sends without a MIC — from the list already loaded, for free.
+		c.fileBlockedTwinLocked(asset.Ticker, fullSymbol, asset.Name)
 	}
 
 	log.Printf("[INFO] Loaded %d instruments into cache", len(resp.Assets))
+	if n := len(c.blockedTwinCache); n > 0 {
+		log.Printf("[INFO] %d tickers have a twin on a blocked venue", n)
+	}
 	return nil
 }
 
 // getFullSymbol converts a ticker to full symbol with MIC, making sure both lot
 // tiers (asset lot and trade lot) are cached for it.
 func (c *Client) getFullSymbol(ticker string, accountID string) string {
+	// A blocked instrument is never resolved: GetAssetParams hangs on it, and
+	// its lot is of no use for something that cannot be traded.
+	if IsBlockedSymbol(ticker) {
+		return ticker
+	}
+
 	// First check local cache
 	c.assetMutex.RLock()
 	if strings.Contains(ticker, "@") {
@@ -416,6 +432,16 @@ func (c *Client) getFullSymbol(ticker string, accountID string) string {
 		return ticker
 	}
 	fullSymbol, hasSymbol := c.assetMicCache[ticker]
+	if hasSymbol && IsBlockedSymbol(fullSymbol) {
+		c.assetMutex.RUnlock()
+		return fullSymbol
+	}
+	// A ticker known only by its blocked twin: GetAsset would refuse it for
+	// carrying no MIC, and there is nothing to resolve.
+	if _, blocked := c.blockedTwinLocked(ticker); blocked {
+		c.assetMutex.RUnlock()
+		return ticker
+	}
 	_, hasLot := c.assetLotCache[ticker]
 	if !hasLot {
 		_, hasLot = c.assetLotCache[fullSymbol]
@@ -1134,6 +1160,18 @@ func (c *Client) GetAccountDetails(accountID string) (*models.AccountInfo, []mod
 		if name == "" {
 			name = c.instrumentNameCache[fullSymbol]
 		}
+		// The broker values a blocked position at zero, and the bulk list says
+		// which ones are: by the venue, or — for a position sent without a MIC —
+		// by its twin there, which also names it.
+		blocked := IsBlockedSymbol(fullSymbol)
+		if !blocked {
+			if twin, ok := c.blockedTwinLocked(pos.Symbol); ok {
+				blocked = true
+				if name == "" {
+					name = twin.Name
+				}
+			}
+		}
 		c.assetMutex.RUnlock()
 
 		position := models.Position{
@@ -1149,6 +1187,8 @@ func (c *Client) GetAccountDetails(accountID string) (*models.AccountInfo, []mod
 			UnrealizedPnL: formatDecimal(pos.UnrealizedPnl),
 
 			MaintenanceMargin: formatDecimal(pos.MaintenanceMargin),
+
+			Blocked: blocked,
 		}
 
 		// Filter out zero positions (historical or closed)
