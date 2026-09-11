@@ -214,3 +214,15 @@ This file tracks all major tracks for the project. Each track has its own detail
 *Plan: [./tracks/analytics_currency_20260910/plan.md](./tracks/analytics_currency_20260910/plan.md)*
 *Phases: 5 | Tasks: 14*
 *Depends on: analytics_overview_20260903, analytics_history_20260903*
+
+
+---
+
+
+- [ ] **Track: Заблокированные активы — распознавание, оценка вне базы, защита от зависающих запросов**
+
+*Link: [./tracks/blocked_assets_20260911/](./tracks/blocked_assets_20260911/)*
+*Spec: [./tracks/blocked_assets_20260911/spec.md](./tracks/blocked_assets_20260911/spec.md)*
+*Plan: [./tracks/blocked_assets_20260911/plan.md](./tracks/blocked_assets_20260911/plan.md)*
+*Phases: 5 | Tasks: 8*
+*Depends on: analytics_currency_20260910*
