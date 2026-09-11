@@ -2,6 +2,7 @@ package testserver
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -80,6 +81,19 @@ func (m *MockMarketDataServer) SubscribeQuote(req *marketdata.SubscribeQuoteRequ
 	}
 
 	ctx := stream.Context()
+
+	// The live API answers a subscription carrying a blocked symbol with
+	// silence — no quote for any of its symbols, no error, until the client
+	// gives up (2026-09-11). The mock does the same, and takes nothing from
+	// the queue meanwhile, so the quotes meant for a healthy stream still
+	// reach it.
+	for _, symbol := range req.Symbols {
+		if blockedVenue(symbol) {
+			<-ctx.Done()
+			return nil
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -99,6 +113,21 @@ func (m *MockMarketDataServer) SubscribeQuote(req *marketdata.SubscribeQuoteRequ
 			}
 		}
 	}
+}
+
+// blockedVenue reports whether a symbol sits on a venue the broker files
+// blocked instruments on. It mirrors api.IsBlockedSymbol, which the test server
+// cannot import: the api package's tests import this one.
+func blockedVenue(symbol string) bool {
+	at := strings.LastIndex(symbol, "@")
+	if at < 0 {
+		return false
+	}
+	switch strings.ToUpper(symbol[at+1:]) {
+	case "_SPBZ", "_MMBZ":
+		return true
+	}
+	return false
 }
 
 // LastQuoteCallsFor reports how many LastQuote calls asked for symbol.

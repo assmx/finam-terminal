@@ -4,6 +4,8 @@ package api
 
 import (
 	"testing"
+
+	"finam-terminal/api/testserver"
 )
 
 func TestIntegration_AssetCache_PopulatedOnInit(t *testing.T) {
@@ -12,9 +14,10 @@ func TestIntegration_AssetCache_PopulatedOnInit(t *testing.T) {
 	client.assetMutex.RLock()
 	defer client.assetMutex.RUnlock()
 
-	// 5 assets from DefaultAssets()
-	if len(client.securityCache) != 5 {
-		t.Errorf("expected 5 securities in cache, got %d", len(client.securityCache))
+	// Every asset from DefaultAssets(), blocked twins included: they are in
+	// the list the broker sends, so they are in the search too.
+	if want := len(testserver.DefaultAssets()); len(client.securityCache) != want {
+		t.Errorf("expected %d securities in cache, got %d", want, len(client.securityCache))
 	}
 
 	// MIC cache should map ticker -> symbol@mic

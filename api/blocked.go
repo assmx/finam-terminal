@@ -74,6 +74,18 @@ func (c *Client) fileBlockedTwinLocked(ticker, fullSymbol, name string) {
 	c.blockedTwinCache[base] = blockedTwin{Symbol: fullSymbol, Name: strings.TrimSpace(name)}
 }
 
+// isBlocked reports whether a symbol is blocked by either rule, given the
+// symbol as the caller holds it and what getFullSymbol resolved it to.
+func (c *Client) isBlocked(symbol, resolved string) bool {
+	if IsBlockedSymbol(symbol) || IsBlockedSymbol(resolved) {
+		return true
+	}
+	c.assetMutex.RLock()
+	defer c.assetMutex.RUnlock()
+	_, ok := c.blockedTwinLocked(symbol)
+	return ok
+}
+
 // blockedTwinLocked returns the twin that marks a ticker the broker sent
 // without a MIC as blocked. It answers only for a ticker the bulk list knows on
 // no venue at all: 621 of the 820 blocked instruments share their base ticker

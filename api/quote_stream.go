@@ -179,6 +179,11 @@ func (c *Client) SetQuoteSymbols(symbols []string) {
 // normalizeSymbols keeps only full symbols (ticker@mic — the stream rejects bare
 // tickers) and removes duplicates, keeping the first occurrence.
 //
+// A symbol on a blocked venue is dropped whoever asked for it — a position, an
+// open profile, the index: one such symbol silences the whole subscription it
+// joins, without an error (2026-09-11: SBER alone delivered 56 quotes in 12 s,
+// SBER with FXRL.MMBZ@_MMBZ none), and with it every other symbol of its shard.
+//
 // The caller's order is preserved because it is priority order: the broker caps
 // how many symbols one subscription may carry, and applySymbolCap truncates from
 // the end, so whatever the caller puts first is what survives.
@@ -186,7 +191,7 @@ func normalizeSymbols(symbols []string) []string {
 	seen := make(map[string]struct{}, len(symbols))
 	out := make([]string, 0, len(symbols))
 	for _, s := range symbols {
-		if !strings.Contains(s, "@") {
+		if !strings.Contains(s, "@") || IsBlockedSymbol(s) {
 			continue
 		}
 		if _, dup := seen[s]; dup {

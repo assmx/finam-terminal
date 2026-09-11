@@ -44,6 +44,34 @@ func DefaultAssets() []*assets.Asset {
 		{Ticker: "LKOH", Symbol: "LKOH@TQBR", Name: "ЛУКОЙЛ", Mic: "TQBR", Type: "BONDS"},
 		{Ticker: "YNDX", Symbol: "YNDX@TQBR", Name: "Яндекс", Mic: "TQBR", Type: "FUTURES"},
 		{Ticker: "ROSN", Symbol: "ROSN@TQBR", Name: "Роснефть", Mic: "TQBR"},
+		// Two blocked instruments as the live list files them (2026-09-11): on
+		// a blocked venue, the ticker suffixed with it, the name cut at 30
+		// characters — FXRL's lost the word BLOCKED with the cut.
+		{Ticker: "FXRL.MMBZ", Symbol: "FXRL.MMBZ@_MMBZ", Name: "FinEx Russian RTS Equity MOEX ", Mic: "_MMBZ", Type: "FUNDS"},
+		{Ticker: "AAPL.SPBZ", Symbol: "AAPL.SPBZ@_SPBZ", Name: "Apple BLOCKED", Mic: "_SPBZ", Type: "EQUITIES"},
+	}
+}
+
+// BlockedAccountPositions returns the two shapes a blocked holding takes: FXRL
+// as the live account of 2026-09-11 holds it — sent without a MIC, the broker's
+// result zeroed although the price moved (100 × (21.83 − 41.38) is not 0) — and
+// a position on a blocked venue itself.
+func BlockedAccountPositions() []*accounts.Position {
+	return []*accounts.Position{
+		{
+			Symbol:        "FXRL",
+			Quantity:      &decimal.Decimal{Value: "100"},
+			AveragePrice:  &decimal.Decimal{Value: "41.38"},
+			CurrentPrice:  &decimal.Decimal{Value: "21.83"},
+			DailyPnl:      &decimal.Decimal{Value: "0.0"},
+			UnrealizedPnl: &decimal.Decimal{Value: "0.0"},
+		},
+		{
+			Symbol:       "AAPL.SPBZ@_SPBZ",
+			Quantity:     &decimal.Decimal{Value: "3"},
+			AveragePrice: &decimal.Decimal{Value: "170"},
+			CurrentPrice: &decimal.Decimal{Value: "180"},
+		},
 	}
 }
 

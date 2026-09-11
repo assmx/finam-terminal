@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/accounts"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/assets"
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
 	"google.golang.org/genproto/googleapis/type/decimal"
 	"google.golang.org/grpc"
 )
@@ -225,6 +227,58 @@ func TestGetFullSymbol_BlockedAsksNothing(t *testing.T) {
 	}
 	if got := m.assetCalls.Load() + m.paramCalls.Load(); got != 0 {
 		t.Errorf("%d GetAsset/GetAssetParams calls, want 0", got)
+	}
+}
+
+// TestGetQuotes_SkipsBlockedSymbols pins the quote guard: LastQuote on a
+// blocked symbol hangs until its deadline (30 s on 2026-09-10), so a batch that
+// holds one must not ask about it — silently, since it is not a failure — while
+// every other symbol is still quoted.
+func TestGetQuotes_SkipsBlockedSymbols(t *testing.T) {
+	m := &refusalMocks{}
+	client := blockedClient(t, m, blockedList())
+	var asked []string
+	client.marketDataClient = &mockMarketDataServiceClient{
+		LastQuoteFunc: func(_ context.Context, in *marketdata.QuoteRequest, _ ...grpc.CallOption) (*marketdata.QuoteResponse, error) {
+			asked = append(asked, in.Symbol)
+			return &marketdata.QuoteResponse{Symbol: in.Symbol, Quote: &marketdata.Quote{Symbol: in.Symbol, Last: &decimal.Decimal{Value: "1"}}}, nil
+		},
+	}
+
+	quotes, err := client.GetQuotes("acc1", []string{"AAPL.SPBZ@_SPBZ", "SBER@MISX", "FXRL"})
+	if err != nil {
+		t.Fatalf("GetQuotes error: %v", err)
+	}
+	if len(asked) != 1 || asked[0] != "SBER@MISX" {
+		t.Errorf("LastQuote asked for %v, want [SBER@MISX] alone", asked)
+	}
+	if len(quotes) != 1 || quotes["SBER@MISX"] == nil {
+		t.Errorf("quotes = %v, want SBER@MISX alone", quotes)
+	}
+}
+
+// TestGetAssetParams_RefusesBlocked pins the trading-parameters guard: the call
+// hangs on a blocked symbol (two of three probes on 2026-09-11), so the client
+// answers ErrBlockedInstrument itself — for a symbol on a blocked venue and for
+// a ticker known only by its blocked twin — and still asks about anything else.
+func TestGetAssetParams_RefusesBlocked(t *testing.T) {
+	m := &refusalMocks{}
+	client := blockedClient(t, m, blockedList())
+
+	for _, symbol := range []string{"AAPL.SPBZ@_SPBZ", "FXRL"} {
+		if _, err := client.GetAssetParams("acc1", symbol); !errors.Is(err, ErrBlockedInstrument) {
+			t.Errorf("GetAssetParams(%q) error = %v, want ErrBlockedInstrument", symbol, err)
+		}
+	}
+	if got := m.paramCalls.Load(); got != 0 {
+		t.Errorf("GetAssetParams sent %d requests for blocked symbols, want 0", got)
+	}
+
+	if _, err := client.GetAssetParams("acc1", "SBER@MISX"); err != nil {
+		t.Fatalf("GetAssetParams(SBER@MISX) error: %v", err)
+	}
+	if got := m.paramCalls.Load(); got == 0 {
+		t.Error("GetAssetParams(SBER@MISX) sent no request; the guard must stop only blocked symbols")
 	}
 }
 

@@ -1207,7 +1207,10 @@ func (c *Client) GetQuotes(accountID string, symbols []string) (map[string]*mode
 	quotes := make(map[string]*models.Quote)
 	for _, symbol := range symbols {
 		fullSymbol := c.getFullSymbol(symbol, accountID)
-		if !strings.Contains(fullSymbol, "@") {
+		// A blocked symbol is skipped like one without a MIC, and as quietly:
+		// LastQuote on it hangs until the deadline, and there is no price to
+		// get — the broker values it at zero.
+		if !strings.Contains(fullSymbol, "@") || IsBlockedSymbol(fullSymbol) {
 			continue
 		}
 
@@ -1985,10 +1988,16 @@ func (c *Client) GetAssetInfo(accountID string, symbol string) (*models.AssetDet
 
 // GetAssetParams returns trading parameters for a symbol
 func (c *Client) GetAssetParams(accountID string, symbol string) (*models.AssetParams, error) {
+	fullSymbol := c.getFullSymbol(symbol, accountID)
+
+	// The call hangs on a blocked instrument — the profile would wait out the
+	// whole deadline for parameters that say it cannot be traded.
+	if c.isBlocked(symbol, fullSymbol) {
+		return nil, fmt.Errorf("asset params for %s: %w", symbol, ErrBlockedInstrument)
+	}
+
 	ctx, cancel := c.getContext()
 	defer cancel()
-
-	fullSymbol := c.getFullSymbol(symbol, accountID)
 
 	resp, err := c.assetsClient.GetAssetParams(ctx, &assets.GetAssetParamsRequest{
 		Symbol:    fullSymbol,
