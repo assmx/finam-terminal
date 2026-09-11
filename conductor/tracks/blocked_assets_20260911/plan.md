@@ -7,14 +7,14 @@
 - [x] Task: Одноразовые программы в scratchpad (в репозиторий не попали): массовый список (площадки, имена, `is_archived`, суффиксы, двойники живых площадок), позиции всех счетов обоих токенов со сверкой с `equity`, `GetAsset`/`GetAssetParams`/`LastQuote`/`Bars`/`Schedule`/календарь по заблокированным символам, `SubscribeQuote` с заблокированным символом и контролем. Факты и решения — в spec.md
   - Acceptance: spec.md содержит «Результаты разведки», правило распознавания и решения пользователя
 
-## Phase 2: API-слой
+## Phase 2: API-слой [checkpoint: 6ef38c9]
 - [x] Task: (Red→Green) Распознавание: `models.Position.Blocked`; `api/blocked.go` — `blockedMICs`, `IsBlockedSymbol` (MIC после последнего `@`, без учёта регистра), индекс двойников в `loadAssetCache` (базовый тикер → символ и имя, первый в списке побеждает); `GetAccountDetails` помечает по правилу (А)/(Б), имя у двойника, если кеш имён пуст; `getFullSymbol` не разрешает лот для заблокированного символа и тикера по (Б); юнит-тесты: таблица `IsBlockedSymbol`, индекс двойников, FXRL — 0 `GetAsset`, позиция на `_MMBZ` — 0 `GetAsset`/`GetAssetParams`, тикер без MIC с живой площадкой — как раньше, тикер без двойника — как раньше (кеш отказов) (e654174)
   - Acceptance: тесты зелёные
 - [x] Task: (Red→Green) Защита: `GetQuotes` пропускает заблокированный символ, `normalizeSymbols` выбрасывает его из подписки, `GetAssetParams` отвечает `ErrBlockedInstrument` без запроса; testserver: двойники `FXRL.MMBZ@_MMBZ` и `AAPL.SPBZ@_SPBZ` в `DefaultAssets`, счёт с позицией `FXRL` без MIC, `SubscribeQuote` мока молчит при заблокированном символе в подписке (как реальный API); интеграционные тесты через bufconn: признак после `GetAccountDetails` при нуле `GetAsset` по FXRL, ноль `LastQuote` по заблокированному, поток позиций доставляет при заблокированном символе в желаемом наборе (4adddd7)
   - Acceptance: юнит- и интеграционные тесты зелёные
 
 ## Phase 3: Пакет analytics
-- [ ] Task: (Red→Green) `Structure` — заблокированное вне базы и всех разрезов, `BlockedCount`/`BlockedValue` (по цене брокера, по модулю, пересчёт по `RateTo`, без пересчёта — только в счётчике); `Valuation` — вне стоимости и дня, «ничего не держит» — по незаблокированным; `RatesToFetch`, `BondsNeedingFace`, `ExpectedPayouts` пропускают; табличные тесты и property-тест (заблокированные не двигают `Base`, `Groups`, `Currencies`, `Exposure`)
+- [~] Task: (Red→Green) `Structure` — заблокированное вне базы и всех разрезов, `BlockedCount`/`BlockedValue` (по цене брокера, по модулю, пересчёт по `RateTo`, без пересчёта — только в счётчике); `Valuation` — вне стоимости и дня, «ничего не держит» — по незаблокированным; `RatesToFetch`, `BondsNeedingFace`, `ExpectedPayouts` пропускают; табличные тесты и property-тест (заблокированные не двигают `Base`, `Groups`, `Currencies`, `Exposure`)
   - Acceptance: тесты зелёные; покрытие пакета ≥ 80%
 
 ## Phase 4: UI
