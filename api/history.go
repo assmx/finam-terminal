@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"strings"
 	"time"
 
@@ -98,12 +97,21 @@ type HistoryRequest struct {
 	To               time.Time
 }
 
-// HistoryProgress is reported after every request so a screen can say how far
-// the load has got.
+// HistoryProgress is reported after every finished window so a screen can say
+// how far the load has got.
+//
+// Done and Total count windows — one chunk of one method — rather than
+// requests. A window that has to be split costs more requests but stays one
+// step, so Done never runs past Total. Total is known before the first request
+// and capped by the request guard, because a longer pass stops there: an
+// unsplit pass that reaches the guard ends exactly on its total.
 type HistoryProgress struct {
 	Requests  int
 	Estimated int
 	Boundary  time.Time
+
+	Done  int
+	Total int
 }
 
 // HistoryBundle is everything one pass produced.
@@ -178,6 +186,7 @@ func (c *Client) LoadHistory(ctx context.Context, req HistoryRequest, progress f
 		ctx:       ctx,
 		accountID: req.AccountID,
 		estimated: estimated,
+		total:     min(estimated, historyMaxRequests),
 		progress:  progress,
 		bundle:    bundle,
 	}
@@ -226,6 +235,11 @@ type historyWalk struct {
 	progress  func(HistoryProgress)
 	bundle    *HistoryBundle
 
+	// total is the number of windows the pass can take; windows is how many
+	// it has finished.
+	total   int
+	windows int
+
 	requests        int
 	largestResponse int
 	paced           bool
@@ -238,25 +252,36 @@ type historyWalk struct {
 func (w *historyWalk) stopped() bool { return w.bundle.Stop != StopNone }
 
 // run walks one method backwards from to down to p.from.
+//
+// Every window starts a whole number of chunks before to, so the walk takes
+// exactly estimateRequests(p.from, to) windows — the total the progress is
+// measured against. Stepping from the previous start instead drifted by an
+// instant per window, and a span a few nanoseconds past a whole number of
+// chunks then took one window fewer than its total and skipped p.from itself.
 func (w *historyWalk) run(p *methodPass, to time.Time) {
-	cursor := to
-	for cursor.After(p.from) {
+	start, end := to, to
+	for {
 		if w.stopped() {
 			return
 		}
-		start := cursor.Add(-historyChunk)
-		if start.Before(p.from) {
+		start = start.Add(-historyChunk)
+		last := !start.After(p.from)
+		if last {
 			start = p.from
 		}
-		if !w.fetchWindow(p, start, cursor) {
+		if !w.fetchWindow(p, start, end) {
 			return
+		}
+		p.boundary = start
+		w.windows++
+		w.report(p)
+		if last {
+			break
 		}
 		// Windows are disjoint: the next one ends where this one starts, minus
 		// an instant. Sharing the boundary would fetch a record sitting exactly
 		// on it twice.
-		cursor = start.Add(-time.Nanosecond)
-		p.boundary = start
-		w.report(p)
+		end = start.Add(-time.Nanosecond)
 	}
 	p.done = true
 }
@@ -384,6 +409,8 @@ func (w *historyWalk) report(p *methodPass) {
 		Requests:  w.requests,
 		Estimated: w.estimated,
 		Boundary:  p.boundary,
+		Done:      w.windows,
+		Total:     w.total,
 	})
 }
 
@@ -452,13 +479,22 @@ func quotaMatchesMethod(quotaName, method string) bool {
 	return strings.HasSuffix(strings.ToLower(quotaName), "."+strings.ToLower(method))
 }
 
-// estimateRequests is how many chunks a window takes.
+// estimateRequests is how many chunks a window takes — exactly the number of
+// windows run walks it in.
+//
+// The division is in integers. A chunk is some 8·10^15 nanoseconds, so a span
+// of two chunks is already past the 2^53 a float64 holds exactly, and the
+// nanosecond that costs the walk one more window was rounded away.
 func estimateRequests(from, to time.Time) int {
 	span := to.Sub(from)
 	if span <= 0 {
 		return 0
 	}
-	return int(math.Ceil(float64(span) / float64(historyChunk)))
+	n := span / historyChunk
+	if span%historyChunk != 0 {
+		n++
+	}
+	return int(n)
 }
 
 // combinedBoundary is the point from which every requested method is complete —

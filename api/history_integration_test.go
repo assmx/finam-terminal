@@ -30,14 +30,25 @@ func TestLoadHistoryIntegration_ChunkCount(t *testing.T) {
 	client, server := setupTestServer(t)
 
 	to := time.Now()
+	var seen []HistoryProgress
 	bundle, err := client.LoadHistory(context.Background(), HistoryRequest{
 		AccountID:        "ACC001",
 		TradesFrom:       to.Add(-3 * historyChunk),
 		TransactionsFrom: to.Add(-2 * historyChunk),
 		To:               to,
-	}, nil)
+	}, func(p HistoryProgress) { seen = append(seen, p) })
 	if err != nil {
 		t.Fatalf("LoadHistory failed: %v", err)
+	}
+
+	// One step per window of either method, ending exactly on the total.
+	if len(seen) != 5 {
+		t.Fatalf("progress reported %d times, want 5", len(seen))
+	}
+	for i, p := range seen {
+		if p.Done != i+1 || p.Total != 5 {
+			t.Errorf("report %d = %d of %d, want %d of 5", i, p.Done, p.Total, i+1)
+		}
 	}
 
 	if server.Accounts.TradesCallCount != 3 {
@@ -109,11 +120,12 @@ func TestLoadHistoryIntegration_SplitsOnServerTruncation(t *testing.T) {
 	server.Accounts.TransactionsLimitCap = 2
 
 	to := time.Now()
+	var reports []HistoryProgress
 	bundle, err := client.LoadHistory(context.Background(), HistoryRequest{
 		AccountID:        "ACC001",
 		TransactionsFrom: to.Add(-historyChunk),
 		To:               to,
-	}, nil)
+	}, func(p HistoryProgress) { reports = append(reports, p) })
 	if err != nil {
 		t.Fatalf("LoadHistory failed: %v", err)
 	}
@@ -121,6 +133,13 @@ func TestLoadHistoryIntegration_SplitsOnServerTruncation(t *testing.T) {
 	if server.Accounts.TransactionsCallCount < 3 {
 		t.Errorf("Transactions called %d times, want at least 3 — one full answer plus its halves",
 			server.Accounts.TransactionsCallCount)
+	}
+
+	// However many requests the split cost, it was one window: one step, and
+	// the pass finishes on its total.
+	if len(reports) != 1 || reports[0].Done != 1 || reports[0].Total != 1 {
+		t.Errorf("progress = %+v over %d requests, want a single report of 1 of 1",
+			reports, server.Accounts.TransactionsCallCount)
 	}
 
 	// The fixture holds 11 transactions inside a few hours. Splitting a 92-day

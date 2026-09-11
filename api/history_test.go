@@ -589,6 +589,230 @@ func TestLoadHistory_Progress(t *testing.T) {
 	}
 }
 
+// oneTradePerWindow answers every window with a single trade. A stopped pass
+// that loaded nothing reports an error instead of its bundle, so the tests of
+// a stopped pass need something to have arrived first.
+func oneTradePerWindow(wf, _ time.Time, _ int32) []*tradeapiv1.AccountTrade {
+	return []*tradeapiv1.AccountTrade{tradeAt(wf.Format("20060102150405.000000000"), wf.Add(time.Hour))}
+}
+
+// recordProgress collects every progress report of one pass.
+func recordProgress(seen *[]HistoryProgress) func(HistoryProgress) {
+	return func(p HistoryProgress) { *seen = append(*seen, p) }
+}
+
+// checkWindowSteps asserts the shape every pass shares: Done climbs by one per
+// report from 1, and Total never moves.
+func checkWindowSteps(t *testing.T, seen []HistoryProgress, total int) {
+	t.Helper()
+	for i, p := range seen {
+		if p.Done != i+1 {
+			t.Errorf("report %d: Done = %d, want %d — one step per finished window", i, p.Done, i+1)
+		}
+		if p.Total != total {
+			t.Errorf("report %d: Total = %d, want %d throughout the pass", i, p.Total, total)
+		}
+	}
+}
+
+// TestLoadHistory_ProgressCountsWindows: a pass reports one step per window of
+// either method, and a pass that ran to the end finishes exactly on its total.
+// The total is known before the first request, which is what lets a bar be
+// drawn to scale from the start.
+func TestLoadHistory_ProgressCountsWindows(t *testing.T) {
+	noPace(t)
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	client := historyClient(&historyRecorder{}, nil, nil)
+
+	var seen []HistoryProgress
+	if _, err := client.LoadHistory(context.Background(), HistoryRequest{
+		AccountID:        "ACC001",
+		TradesFrom:       to.Add(-3 * historyChunk),
+		TransactionsFrom: to.Add(-2 * historyChunk),
+		To:               to,
+	}, recordProgress(&seen)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(seen) != 5 {
+		t.Fatalf("progress reported %d times, want 5 (3 trade windows + 2 transaction windows)", len(seen))
+	}
+	checkWindowSteps(t, seen, 5)
+	if last := seen[len(seen)-1]; last.Done != last.Total {
+		t.Errorf("finished pass ends at %d of %d, want the whole total", last.Done, last.Total)
+	}
+}
+
+// TestLoadHistory_ProgressSplitWindowIsOneStep: a window that had to be halved
+// costs more requests but is still one step, reported once both halves are in.
+// Counting requests instead let the old text run past its own estimate
+// ("запрос 20 из ~18").
+func TestLoadHistory_ProgressSplitWindowIsOneStep(t *testing.T) {
+	noPace(t)
+	prev := historyLimit
+	historyLimit = 4
+	t.Cleanup(func() { historyLimit = prev })
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	from := to.Add(-2 * historyChunk)
+	newest := to.Add(-historyChunk)
+
+	// Eight records in the newest window only: it comes back full and is
+	// halved; the older window comes back empty.
+	all := make([]*tradeapiv1.AccountTrade, 0, 8)
+	for i := range 8 {
+		all = append(all, tradeAt(fmt.Sprintf("T%d", i), newest.Add(time.Duration(i+1)*historyChunk/9)))
+	}
+	rec := &historyRecorder{
+		tradesIn: func(wf, wt time.Time, limit int32) []*tradeapiv1.AccountTrade {
+			var in []*tradeapiv1.AccountTrade
+			for _, tr := range all {
+				if ts := tr.Timestamp.AsTime(); !ts.Before(wf) && !ts.After(wt) {
+					in = append(in, tr)
+				}
+			}
+			if limit > 0 && len(in) > int(limit) {
+				in = in[len(in)-int(limit):]
+			}
+			return in
+		},
+	}
+	client := historyClient(rec, nil, nil)
+
+	var seen []HistoryProgress
+	bundle, err := client.LoadHistory(context.Background(), HistoryRequest{
+		AccountID:  "ACC001",
+		TradesFrom: from,
+		To:         to,
+	}, recordProgress(&seen))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if bundle.Requests <= 2 {
+		t.Fatalf("Requests = %d; the newest window was meant to be split", bundle.Requests)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("progress reported %d times over %d requests, want once per window (2)", len(seen), bundle.Requests)
+	}
+	checkWindowSteps(t, seen, 2)
+}
+
+// TestLoadHistory_ProgressTotalCappedByGuard: a pass longer than the request
+// guard stops at the guard, so its total is the guard — and an unsplit pass
+// fills the bar exactly where it stops.
+func TestLoadHistory_ProgressTotalCappedByGuard(t *testing.T) {
+	noPace(t)
+	prev := historyMaxRequests
+	historyMaxRequests = 5
+	t.Cleanup(func() { historyMaxRequests = prev })
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	client := historyClient(&historyRecorder{tradesIn: oneTradePerWindow}, nil, nil)
+
+	var seen []HistoryProgress
+	bundle, err := client.LoadHistory(context.Background(), HistoryRequest{
+		AccountID:  "ACC001",
+		TradesFrom: to.Add(-100 * historyChunk),
+		To:         to,
+	}, recordProgress(&seen))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundle.Stop != StopGuard {
+		t.Fatalf("Stop = %v, want StopGuard", bundle.Stop)
+	}
+
+	if len(seen) != historyMaxRequests {
+		t.Fatalf("progress reported %d times, want %d", len(seen), historyMaxRequests)
+	}
+	checkWindowSteps(t, seen, historyMaxRequests)
+}
+
+// TestLoadHistory_ProgressStopsShortOnRateLimit: a pass the API refused ends
+// before its total. The bar gives way to the screen that explains why.
+func TestLoadHistory_ProgressStopsShortOnRateLimit(t *testing.T) {
+	noPace(t)
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	rec := &historyRecorder{
+		tradesIn: oneTradePerWindow,
+		tradesErr: func(call int) error {
+			if call >= 2 {
+				return status.Error(codes.ResourceExhausted, "quota exceeded")
+			}
+			return nil
+		},
+	}
+	client := historyClient(rec, nil, nil)
+
+	var seen []HistoryProgress
+	bundle, err := client.LoadHistory(context.Background(), HistoryRequest{
+		AccountID:  "ACC001",
+		TradesFrom: to.Add(-4 * historyChunk),
+		To:         to,
+	}, recordProgress(&seen))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundle.Stop != StopRateLimited {
+		t.Fatalf("Stop = %v, want StopRateLimited", bundle.Stop)
+	}
+
+	if len(seen) != 2 {
+		t.Fatalf("progress reported %d times, want the 2 windows before the refusal", len(seen))
+	}
+	checkWindowSteps(t, seen, 4)
+	if last := seen[len(seen)-1]; last.Done >= last.Total {
+		t.Errorf("refused pass ends at %d of %d, want it short of the total", last.Done, last.Total)
+	}
+}
+
+// TestLoadHistory_WindowCountMatchesEstimate: the walk takes exactly as many
+// windows as estimateRequests promises, whatever the span. The total a bar is
+// drawn against comes from the estimate, so a walk one window short of it would
+// leave a finished pass stuck below 100%. The spans a few nanoseconds past a
+// whole number of chunks are where the two used to disagree.
+func TestLoadHistory_WindowCountMatchesEstimate(t *testing.T) {
+	noPace(t)
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	extras := []time.Duration{0, time.Nanosecond, 2 * time.Nanosecond, 3 * time.Nanosecond,
+		4 * time.Nanosecond, time.Hour, historyChunk - time.Nanosecond}
+
+	for chunks := 0; chunks <= 5; chunks++ {
+		for _, extra := range extras {
+			span := time.Duration(chunks)*historyChunk + extra
+			if span <= 0 {
+				continue
+			}
+			from := to.Add(-span)
+
+			rec := &historyRecorder{}
+			client := historyClient(rec, nil, nil)
+			if _, err := client.LoadHistory(context.Background(), HistoryRequest{
+				AccountID:  "ACC001",
+				TradesFrom: from,
+				To:         to,
+			}, nil); err != nil {
+				t.Fatalf("span %v: unexpected error: %v", span, err)
+			}
+
+			windows, _ := rec.counts()
+			if want := estimateRequests(from, to); windows != want {
+				t.Errorf("span %d chunks + %v: walk took %d windows, estimate says %d", chunks, extra, windows, want)
+			}
+
+			// However the span is cut, the oldest window starts at From: an
+			// instant the walk steps over is a record it never asks for.
+			if oldest := rec.tradeWindows[len(rec.tradeWindows)-1]; !oldest.from.Equal(from) {
+				t.Errorf("span %d chunks + %v: oldest window starts %v, want From %v", chunks, extra, oldest.from, from)
+			}
+		}
+	}
+}
+
 // --- quota pre-check ---
 
 func quota(name string, remaining int64, reset time.Time) *metrics.GetUsageMetricsResponse_QuotaUsage {
@@ -761,6 +985,8 @@ func TestEstimateRequests(t *testing.T) {
 		{"exactly one chunk", historyChunk, 1},
 		{"one chunk plus an hour", historyChunk + time.Hour, 2},
 		{"ten chunks", 10 * historyChunk, 10},
+		// Past 2^53 nanoseconds a float64 division rounds this back to 2.
+		{"two chunks plus a nanosecond", 2*historyChunk + time.Nanosecond, 3},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
