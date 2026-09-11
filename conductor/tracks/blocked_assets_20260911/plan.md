@@ -22,9 +22,9 @@
   - Acceptance: тесты зелёные; существующие ui-тесты не сломаны
 
 ## Phase 5: Документация и верификация
-- [~] Task: Полная авто-проверка — `go build ./...`, `go vet ./...`, `go test ./...`, `go test -tags=integration ./api/...`, `CGO_ENABLED=1 go test -race` обеих сюит (без C-компилятора локально — гейт CI), `golangci-lint run ./...`, покрытие нового кода
+- [x] Task: Полная авто-проверка — `go build ./...`, `go vet ./...`, `go test ./...`, `go test -tags=integration ./api/...`, `CGO_ENABLED=1 go test -race` обеих сюит (без C-компилятора локально — гейт CI), `golangci-lint run ./...`, покрытие нового кода (4011777)
   - Acceptance: нет ошибок и предупреждений, линтер чистый, покрытие нового кода ≥ 80%
-- [ ] Task: Документация — `docs/user_manual/analytics.md` (строка «заблокировано», что не входит в оценку и почему), `docs/user_manual/positions.md` (`BLOCKED` в Value), CLAUDE.md (`api/blocked.go`, `Position.Blocked`, изменения `Structure`/`Valuation`, защита потока, раздел разведки, testserver), CHANGELOG.md
+- [~] Task: Документация — `docs/user_manual/analytics.md` (строка «заблокировано», что не входит в оценку и почему), `docs/user_manual/positions.md` (`BLOCKED` в Value), CLAUDE.md (`api/blocked.go`, `Position.Blocked`, изменения `Structure`/`Valuation`, защита потока, раздел разведки, testserver), CHANGELOG.md
   - Acceptance: документация соответствует реализации
 - [ ] Task: (Ручной смоук) Счёт …5519: Value у FXRL — `BLOCKED`; «Итого» «Структуры» равно `equity`; строка `заблокировано: 1 · …`; в логе нет `GetAsset` по FXRL; профиль заблокированной бумаги из поиска открывается без 30-секундного ожидания, котировки позиций продолжают идти
   - Acceptance: пользователь подтверждает поведение
