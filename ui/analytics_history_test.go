@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -582,7 +584,6 @@ func TestHistoryStatusText(t *testing.T) {
 		want string
 	}{
 		{"nothing loaded", analyticsAccountData{}, ""},
-		{"in progress", analyticsAccountData{progress: "идёт загрузка"}, "идёт загрузка"},
 		{"an error wins over a stale bundle",
 			analyticsAccountData{historyErr: "не удалось", history: bundle(api.StopNone, true)}, "не удалось"},
 		{"complete", analyticsAccountData{history: bundle(api.StopNone, true)}, ""},
@@ -608,25 +609,170 @@ func TestHistoryStatusText(t *testing.T) {
 	}
 }
 
-// TestHistoryProgressText reports how far a pass has got, with and without an
-// estimate to measure against.
-func TestHistoryProgressText(t *testing.T) {
-	boundary := time.Date(2024, 5, 12, 0, 0, 0, 0, time.UTC)
+// TestHistoryLoadFraction measures a pass in the steps that take real time:
+// the walk's windows and the benchmark's two bar windows after it.
+func TestHistoryLoadFraction(t *testing.T) {
+	cases := []struct {
+		name string
+		load historyLoad
+		want float64
+	}{
+		{"before the first report", historyLoad{}, 0},
+		{"total known, nothing done", historyLoad{windowTotal: 3}, 0},
+		{"one window of three", historyLoad{windows: 1, windowTotal: 3}, 0.2},
+		{"every window, no bars yet", historyLoad{windows: 3, windowTotal: 3}, 0.6},
+		{"every window and one bar window", historyLoad{windows: 3, windowTotal: 3, bars: 1}, 0.8},
+		{"the whole pass", historyLoad{windows: 3, windowTotal: 3, bars: 2}, 1},
+		{"stopped short, bars after", historyLoad{windows: 1, windowTotal: 3, bars: 2}, 0.6},
+		{"a pass that reported no window", historyLoad{bars: 1}, 0.5},
+		{"more done than the total is clamped", historyLoad{windows: 9, windowTotal: 3, bars: 2}, 1},
+		{"more bars than asked for is clamped", historyLoad{windows: 3, windowTotal: 3, bars: 5}, 1},
+		{"a negative count is clamped", historyLoad{windows: -4, windowTotal: 3}, 0},
+		{"a negative total is not divided by", historyLoad{windows: 1, windowTotal: -9}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := historyLoadFraction(c.load); math.Abs(got-c.want) > 1e-9 {
+				t.Errorf("historyLoadFraction(%+v) = %v, want %v", c.load, got, c.want)
+			}
+		})
+	}
+}
 
-	withEstimate := historyProgressText(api.HistoryProgress{Requests: 14, Estimated: 40, Boundary: boundary})
-	for _, want := range []string{"14", "40", "12.05.2024"} {
-		if !strings.Contains(withEstimate, want) {
-			t.Errorf("progress %q does not mention %q", withEstimate, want)
+// TestHistoryLoadFraction_OnlyMovesForward walks every pass length step by step:
+// each step moves the bar forward, and a pass that ran to the end fills it.
+func TestHistoryLoadFraction_OnlyMovesForward(t *testing.T) {
+	for total := 0; total <= 12; total++ {
+		prev := historyLoadFraction(historyLoad{})
+		if prev != 0 {
+			t.Fatalf("total %d: the bar starts at %v, want 0", total, prev)
+		}
+
+		steps := []historyLoad{}
+		for done := 1; done <= total; done++ {
+			steps = append(steps, historyLoad{windows: done, windowTotal: total})
+		}
+		for bars := 1; bars <= benchmarkSteps; bars++ {
+			steps = append(steps, historyLoad{windows: total, windowTotal: total, bars: bars})
+		}
+
+		for _, s := range steps {
+			got := historyLoadFraction(s)
+			if got <= prev {
+				t.Errorf("total %d: step %+v shows %v after %v, want it further on", total, s, got, prev)
+			}
+			prev = got
+		}
+		if prev != 1 {
+			t.Errorf("total %d: a finished pass ends at %v, want 1", total, prev)
+		}
+	}
+}
+
+// TestHistory_ProgressFollowsThePass drives the loader through a pass the mock
+// reports window by window, then through the two bar requests, and reads the
+// fraction at every step: empty before the first answer, forward on every
+// window and every bar window, full at the end — for the same requests as
+// before.
+func TestHistory_ProgressFollowsThePass(t *testing.T) {
+	mock := historyMock()
+	mock.LoadHistoryProgress = []api.HistoryProgress{
+		{Done: 1, Total: 3},
+		{Done: 2, Total: 3},
+		{Done: 3, Total: 3},
+	}
+
+	var app *App
+	var mu sync.Mutex
+	var seen []float64
+	observe := func() {
+		app.dataMutex.RLock()
+		data := app.analytics.byAccount["acc1"]
+		loading, fraction := data.loading, historyLoadFraction(data.load)
+		app.dataMutex.RUnlock()
+
+		mu.Lock()
+		defer mu.Unlock()
+		if !loading {
+			t.Errorf("step %d: the pass is not marked as loading", len(seen))
+		}
+		seen = append(seen, fraction)
+	}
+	mock.LoadHistoryObserve = observe
+	bars := mock.GetBarsFunc
+	mock.GetBarsFunc = func(accountID, symbol string, tf marketdata.TimeFrame, from, to time.Time) ([]models.Bar, error) {
+		observe()
+		return bars(accountID, symbol, tf, from, to)
+	}
+
+	app, capture := historyApp(t, mock)
+	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
+	waitHistory(t, app, mock, 1)
+
+	app.dataMutex.RLock()
+	final := historyLoadFraction(app.analytics.byAccount["acc1"].load)
+	app.dataMutex.RUnlock()
+
+	mu.Lock()
+	got := append(append([]float64(nil), seen...), final)
+	mu.Unlock()
+
+	// Before each of the three reports, after the last one, before each of the
+	// two bar requests, and once the pass is over.
+	want := []float64{0, 0.2, 0.4, 0.6, 0.6, 0.8, 1}
+	if len(got) != len(want) {
+		t.Fatalf("fractions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 1e-9 {
+			t.Errorf("fractions = %v, want %v", got, want)
+			break
 		}
 	}
 
-	// An estimate of zero must not render "из ~0".
-	withoutEstimate := historyProgressText(api.HistoryProgress{Requests: 3})
-	if strings.Contains(withoutEstimate, "~0") {
-		t.Errorf("progress %q advertises an estimate of zero", withoutEstimate)
+	if n := mock.LoadHistoryCalls.Load(); n != 1 {
+		t.Errorf("LoadHistory called %d times, want 1 — the bar costs no request", n)
 	}
-	if !strings.Contains(withoutEstimate, "3") {
-		t.Errorf("progress %q does not show the request count", withoutEstimate)
+	if n := mock.GetBarsCalls.Load(); n != 2 {
+		t.Errorf("GetBars called %d times, want 2 — the bar costs no request", n)
+	}
+}
+
+// TestHistory_RefreshStartsTheBarAgain: R on a loaded history is a pass of its
+// own, and its bar starts from nothing rather than from where the last one
+// ended.
+func TestHistory_RefreshStartsTheBarAgain(t *testing.T) {
+	mock := historyMock()
+	app, capture := historyApp(t, mock)
+
+	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
+	waitHistory(t, app, mock, 1)
+
+	app.dataMutex.Lock()
+	app.analytics.byAccount["acc1"].historyAt = time.Now().Add(-2 * analyticsRefreshCooldown)
+	app.dataMutex.Unlock()
+
+	var mu sync.Mutex
+	atStart := -1.0
+	mock.LoadHistoryObserve = func() {
+		app.dataMutex.RLock()
+		fraction := historyLoadFraction(app.analytics.byAccount["acc1"].load)
+		app.dataMutex.RUnlock()
+
+		mu.Lock()
+		defer mu.Unlock()
+		if atStart < 0 {
+			atStart = fraction
+		}
+	}
+
+	capture(tcell.NewEventKey(tcell.KeyRune, 'R', tcell.ModNone))
+	waitHistory(t, app, mock, 2)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if atStart != 0 {
+		t.Errorf("the refresh bar starts at %v, want 0 — the previous pass ended full", atStart)
 	}
 }
 

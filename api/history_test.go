@@ -553,42 +553,6 @@ func TestLoadHistory_ContextCancelled(t *testing.T) {
 	}
 }
 
-// TestLoadHistory_Progress reports movement to the caller so the screen can say
-// how far the load has got.
-func TestLoadHistory_Progress(t *testing.T) {
-	noPace(t)
-
-	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	from := to.Add(-4 * historyChunk)
-
-	rec := &historyRecorder{}
-	client := historyClient(rec, nil, nil)
-
-	var seen []HistoryProgress
-	if _, err := client.LoadHistory(context.Background(), HistoryRequest{
-		AccountID:  "ACC001",
-		TradesFrom: from,
-		To:         to,
-	}, func(p HistoryProgress) { seen = append(seen, p) }); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(seen) != 4 {
-		t.Fatalf("progress reported %d times, want once per request (4)", len(seen))
-	}
-	for i, p := range seen {
-		if p.Requests != i+1 {
-			t.Errorf("progress %d: Requests = %d, want %d", i, p.Requests, i+1)
-		}
-		if p.Estimated < 4 {
-			t.Errorf("progress %d: Estimated = %d, want at least the 4 chunks", i, p.Estimated)
-		}
-	}
-	if !seen[len(seen)-1].Boundary.Equal(from) {
-		t.Errorf("final progress boundary = %v, want %v", seen[len(seen)-1].Boundary, from)
-	}
-}
-
 // oneTradePerWindow answers every window with a single trade. A stopped pass
 // that loaded nothing reports an error instead of its bundle, so the tests of
 // a stopped pass need something to have arrived first.

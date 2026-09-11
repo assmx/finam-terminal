@@ -106,10 +106,6 @@ type HistoryRequest struct {
 // and capped by the request guard, because a longer pass stops there: an
 // unsplit pass that reaches the guard ends exactly on its total.
 type HistoryProgress struct {
-	Requests  int
-	Estimated int
-	Boundary  time.Time
-
 	Done  int
 	Total int
 }
@@ -185,7 +181,6 @@ func (c *Client) LoadHistory(ctx context.Context, req HistoryRequest, progress f
 		client:    c,
 		ctx:       ctx,
 		accountID: req.AccountID,
-		estimated: estimated,
 		total:     min(estimated, historyMaxRequests),
 		progress:  progress,
 		bundle:    bundle,
@@ -231,7 +226,6 @@ type historyWalk struct {
 	client    *Client
 	ctx       context.Context
 	accountID string
-	estimated int
 	progress  func(HistoryProgress)
 	bundle    *HistoryBundle
 
@@ -274,7 +268,7 @@ func (w *historyWalk) run(p *methodPass, to time.Time) {
 		}
 		p.boundary = start
 		w.windows++
-		w.report(p)
+		w.report()
 		if last {
 			break
 		}
@@ -401,17 +395,11 @@ func (w *historyWalk) pace() {
 	}
 }
 
-func (w *historyWalk) report(p *methodPass) {
+func (w *historyWalk) report() {
 	if w.progress == nil {
 		return
 	}
-	w.progress(HistoryProgress{
-		Requests:  w.requests,
-		Estimated: w.estimated,
-		Boundary:  p.boundary,
-		Done:      w.windows,
-		Total:     w.total,
-	})
+	w.progress(HistoryProgress{Done: w.windows, Total: w.total})
 }
 
 // checkHistoryQuota asks whether the remaining quota can cover the pass.

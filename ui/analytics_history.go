@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"finam-terminal/analytics"
@@ -143,7 +144,7 @@ func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 	}
 	data.loading = true
 	data.historyErr = ""
-	data.progress = "[yellow]История: загрузка…[-]"
+	data.load = historyLoad{}
 	a.dataMutex.Unlock()
 
 	a.updateAnalyticsHistoryStatus()
@@ -151,16 +152,20 @@ func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 	go func() {
 		bundle, err := a.client.LoadHistory(a.ctx, req, func(p api.HistoryProgress) {
 			a.dataMutex.Lock()
-			data.progress = historyProgressText(p)
+			data.load.windows, data.load.windowTotal = p.Done, p.Total
 			a.dataMutex.Unlock()
 			a.queueDraw(func() { a.updateAnalyticsHistoryStatus() })
 		})
 
-		benchmark, benchmarkOK := a.loadBenchmark(account.ID, req, bundle)
+		benchmark, benchmarkOK := a.loadBenchmark(account.ID, req, bundle, func() {
+			a.dataMutex.Lock()
+			data.load.bars++
+			a.dataMutex.Unlock()
+			a.queueDraw(func() { a.updateAnalyticsHistoryStatus() })
+		})
 
 		a.dataMutex.Lock()
 		data.loading = false
-		data.progress = ""
 		data.historyAt = time.Now()
 		switch {
 		case err != nil:
@@ -215,7 +220,10 @@ func mergeHistory(cached, fresh *api.HistoryBundle) *api.HistoryBundle {
 // an interval wider than 366 days and the horizon is routinely longer. A
 // failure here is not fatal — the index comparison is a nicety, and losing it
 // must not cost the history that was just walked.
-func (a *App) loadBenchmark(accountID string, req api.HistoryRequest, bundle *api.HistoryBundle) (analytics.Benchmark, bool) {
+//
+// answered runs after each bar request, failed or not: it is a step of the
+// pass that took real time, and the progress bar counts it.
+func (a *App) loadBenchmark(accountID string, req api.HistoryRequest, bundle *api.HistoryBundle, answered func()) (analytics.Benchmark, bool) {
 	from := req.TradesFrom
 	if from.IsZero() || (!req.TransactionsFrom.IsZero() && req.TransactionsFrom.Before(from)) {
 		from = req.TransactionsFrom
@@ -233,12 +241,14 @@ func (a *App) loadBenchmark(accountID string, req api.HistoryRequest, bundle *ap
 	symbol := indexList[0].Symbol
 
 	first, err := a.client.GetBars(accountID, symbol, marketdata.TimeFrame_TIME_FRAME_D, from, from.Add(benchmarkWindow))
+	answered()
 	if err != nil {
 		log.Printf("[WARN] Benchmark bars unavailable for the start of the horizon: %v", err)
 		return analytics.Benchmark{}, false
 	}
 
 	last, err := a.client.GetBars(accountID, symbol, marketdata.TimeFrame_TIME_FRAME_D, req.To.Add(-benchmarkWindow), req.To)
+	answered()
 	if err != nil {
 		log.Printf("[WARN] Benchmark bars unavailable for the end of the horizon: %v", err)
 		return analytics.Benchmark{}, false
@@ -286,13 +296,42 @@ func (a *App) analyticsAccountSnapshot() (models.AccountInfo, analyticsAccountDa
 	return account, *data, true
 }
 
-// historyProgressText is the line shown while a pass runs.
-func historyProgressText(p api.HistoryProgress) string {
-	if p.Estimated > 0 {
-		return fmt.Sprintf("[yellow]История: запрос %d из ~%d, загружено с %s[-]",
-			p.Requests, p.Estimated, formatHistoryDate(p.Boundary))
+// benchmarkSteps is how many bar requests loadBenchmark makes after the walk:
+// one window at each end of the horizon.
+const benchmarkSteps = 2
+
+// historyLoad is how far a pass has got, counted in the steps that take real
+// time: the windows of the history walk, then the benchmark's bar windows.
+type historyLoad struct {
+	windows     int // finished history windows, HistoryProgress.Done
+	windowTotal int // windows the pass can take, HistoryProgress.Total; 0 until the first report
+	bars        int // bar requests answered
+}
+
+// historyLoadFraction is the share of a pass that is done, in [0, 1].
+//
+// Before the walk reports anything nothing is done, which reads as the empty
+// bar. The first report fixes the total, so from then on every step can only
+// move the bar forward. A pass that stops early never reaches 1 and does not
+// need to: the screen that explains the stop replaces the bar the moment the
+// pass ends.
+func historyLoadFraction(l historyLoad) float64 {
+	steps := l.windowTotal + benchmarkSteps
+	if steps <= 0 {
+		return 0
 	}
-	return fmt.Sprintf("[yellow]История: запрос %d[-]", p.Requests)
+	return clampFraction(float64(l.windows+l.bars) / float64(steps))
+}
+
+// clampFraction pins a share to [0, 1] and reads NaN as nothing done.
+func clampFraction(f float64) float64 {
+	switch {
+	case math.IsNaN(f), f < 0:
+		return 0
+	case f > 1:
+		return 1
+	}
+	return f
 }
 
 // historyErrorText turns a failed pass into the line on the screen. A rate
@@ -306,11 +345,9 @@ func historyErrorText(err error) string {
 
 // historyStatusText is the whole status line for a settled cache: an error, an
 // interrupted pass, or a note that the history does not reach as far back as
-// the account does.
+// the account does. A pass in flight has no line: the progress bar replaces the
+// whole screen while it runs.
 func historyStatusText(data analyticsAccountData) string {
-	if data.progress != "" {
-		return data.progress
-	}
 	if data.historyErr != "" {
 		return data.historyErr
 	}

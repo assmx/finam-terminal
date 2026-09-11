@@ -34,7 +34,10 @@ type analyticsAccountData struct {
 	historyAt  time.Time
 	historyErr string
 	loading    bool
-	progress   string
+
+	// load is how far the pass in flight has got. It is reset when a pass
+	// starts and left as it ended, so it means something only while loading.
+	load historyLoad
 
 	benchmark   analytics.Benchmark
 	benchmarkOK bool

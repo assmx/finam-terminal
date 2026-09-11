@@ -59,12 +59,15 @@ type mockClient struct {
 	// History. LoadHistoryCalls is the counter the laziness assertions rest
 	// on: one pass per account per session, none on a tick, none on a repeat
 	// visit. LoadHistoryDelay lets a test observe the in-flight state, and
-	// LoadHistoryProgress is replayed to the caller so the progress line can
-	// be exercised without a real walk.
+	// LoadHistoryProgress is replayed to the caller so the progress bar can
+	// be exercised without a real walk. LoadHistoryObserve, when set, runs
+	// before each replayed report and once after the last, so a test can read
+	// what the screen would show at every step of the pass.
 	LoadHistoryFunc     func(ctx context.Context, req api.HistoryRequest) (*api.HistoryBundle, error)
 	LoadHistoryCalls    atomic.Int64
 	LoadHistoryDelay    time.Duration
 	LoadHistoryProgress []api.HistoryProgress
+	LoadHistoryObserve  func()
 
 	// Bars and calendars are counted for the same reason: the benchmark asks
 	// for two narrow windows and the payout screen two calendars per position,
@@ -170,8 +173,14 @@ func (m *mockClient) LoadHistory(ctx context.Context, req api.HistoryRequest, pr
 	}
 	if progress != nil {
 		for _, p := range m.LoadHistoryProgress {
+			if m.LoadHistoryObserve != nil {
+				m.LoadHistoryObserve()
+			}
 			progress(p)
 		}
+	}
+	if m.LoadHistoryObserve != nil {
+		m.LoadHistoryObserve()
 	}
 	if m.LoadHistoryFunc != nil {
 		return m.LoadHistoryFunc(ctx, req)
