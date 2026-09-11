@@ -8,7 +8,7 @@
   - Acceptance: юнит- и интеграционные тесты зелёные
   - Note: тест «окна == оценка» нашёл два расхождения, из-за которых завершённый проход не дошёл бы до 100%. Обход отсчитывал окно от предыдущего начала со сдвигом на 1 нс за окно, а `estimateRequests` делила во `float64` — после 2^53 нс наносекунда теряется. Теперь окна начинаются на целое число окон раньше `To`, оценка считается в целых. `Requests`/`Estimated`/`Boundary` пока читает `historyProgressText`; они удаляются вместе с ним в фазе 2.
 
-## Phase 2: UI — полоса вместо текста и пустых рамок
+## Phase 2: UI — полоса вместо текста и пустых рамок [checkpoint: db868ac]
 - [x] Task: (Red→Green) Модель прогресса: в `analyticsAccountData` вместо `progress string` — числовое состояние прохода; чистая `historyLoadFraction` (окна + 2 окна баров, прижим к [0, 1], монотонность); `loadAnalyticsHistoryAsync` пишет прогресс из `HistoryProgress`, `loadBenchmark` засчитывает каждый `GetBars`; `historyProgressText` и ветка прогресса в `historyStatusText` удаляются; тесты — таблица доли, рост по `LoadHistoryProgress` мока, 0% до первого ответа, счётчики мока (`LoadHistory` — 1, `GetBars` — 2) не изменились (ddda4df)
   - Acceptance: тесты зелёные
   - Note: `HistoryProgress.Requests`/`Estimated`/`Boundary` удалены здесь, вместе с `historyProgressText` — последним, кто их читал. У мока появился `LoadHistoryObserve` — чтобы видеть долю на каждом шаге.
