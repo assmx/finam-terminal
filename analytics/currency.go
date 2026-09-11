@@ -167,6 +167,10 @@ func RatesToFetch(in StructureInput) []string {
 
 	held := make(map[string]bool)
 	for _, p := range in.Positions {
+		// A blocked holding is in no sum, so its currency needs no rate.
+		if p.Blocked {
+			continue
+		}
 		money := ValuePosition(p, quoteLast(in.Quotes, p.Symbol), lookupInstrument(in.Instruments, p), base)
 		if money.Valid && money.Value != 0 {
 			held[strings.ToUpper(money.Currency)] = true
@@ -199,7 +203,7 @@ func RatesToFetch(in StructureInput) []string {
 func BondsNeedingFace(in StructureInput) []string {
 	need := make(map[string]bool)
 	for _, p := range in.Positions {
-		if qty, ok := ParseNumber(p.Quantity); !ok || qty == 0 {
+		if qty, ok := ParseNumber(p.Quantity); !ok || qty == 0 || p.Blocked {
 			continue
 		}
 		if NeedsFaceCurrency(p, quoteLast(in.Quotes, p.Symbol), lookupInstrument(in.Instruments, p)) {

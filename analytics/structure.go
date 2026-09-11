@@ -195,6 +195,15 @@ type Allocation struct {
 	// base, with or without a rate. With one they are in the base too, under
 	// «Валюта»; this list is the lines as the broker reported them.
 	ForeignCash []models.CashBalance
+
+	// BlockedCount counts the positions the broker holds on a blocked venue
+	// and values at zero in its equity; they are kept out of every figure
+	// above. BlockedValue is what they would be worth at the broker's own
+	// price, by magnitude and in the base currency — shown beside the count so
+	// the screen says what is frozen, and never added to anything. A blocked
+	// position without a readable price or a rate is counted and not valued.
+	BlockedCount int
+	BlockedValue float64
 }
 
 // Structure computes the portfolio breakdown.
@@ -219,6 +228,14 @@ func Structure(in StructureInput) Allocation {
 	var holdings []Holding
 
 	for _, p := range in.Positions {
+		// The broker values a blocked position at zero and leaves it out of
+		// its equity; every sum here leaves it out too, or the total would
+		// stand above the account's own figure by the frozen part.
+		if p.Blocked {
+			result.addBlocked(p, lookupInstrument(in.Instruments, p), base, in.Rates)
+			continue
+		}
+
 		money := ValuePosition(p, quoteLast(in.Quotes, p.Symbol), lookupInstrument(in.Instruments, p), base)
 		if !money.Valid {
 			result.Skipped++
@@ -299,6 +316,28 @@ func Structure(in StructureInput) Allocation {
 
 // currencyGroup is the type group foreign cash joins.
 var currencyGroup = GroupForType("CURRENCIES")
+
+// addBlocked counts a blocked position and adds what it would be worth to
+// BlockedValue. The price is the broker's own — a blocked symbol is never
+// quoted, and the line on screen says whose price it is — taken by magnitude,
+// like the exposure, and converted into the base. Without a readable price or
+// a rate the position is counted and not valued: the amount never adds two
+// currencies either.
+func (a *Allocation) addBlocked(p models.Position, inst Instrument, base string, rates map[string]models.FXRate) {
+	a.BlockedCount++
+
+	money := ValuePosition(p, "", inst, base)
+	if !money.Valid {
+		return
+	}
+	rate := RateTo(money.Currency, base, rates)
+	if !rate.Valid {
+		return
+	}
+	if sum := a.BlockedValue + math.Abs(money.Value)*rate.Value; !math.IsNaN(sum) && !math.IsInf(sum, 0) {
+		a.BlockedValue = sum
+	}
+}
 
 // countState files a position under the counter its currency state calls for.
 func (a *Allocation) countState(state CurrencyState) {

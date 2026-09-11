@@ -85,7 +85,9 @@ func ExpectedPayouts(
 
 	for _, p := range positions {
 		qty, ok := ParseNumber(p.Quantity)
-		if !ok || qty <= 0 {
+		// A blocked holding pays its holder nothing the terminal can promise,
+		// and the broker values it at zero.
+		if !ok || qty <= 0 || p.Blocked {
 			continue
 		}
 

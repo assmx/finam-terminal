@@ -33,7 +33,8 @@ type Worth struct {
 	// The broker leaves daily_pnl empty for FORTS positions, and
 	// DailyUnreported counts those so the screen can say the figure is
 	// partial. With nothing reported at all Daily is invalid — unless nothing
-	// is held, in which case the day is a real zero.
+	// is held, in which case the day is a real zero. A blocked position does
+	// not count as held: the broker values it at zero and leaves it out.
 	Daily           Metric
 	DailyUnreported int
 
@@ -91,9 +92,20 @@ func Valuation(in ValuationInput) Worth {
 	var (
 		daily, cost, margin           float64
 		dailyReported, marginReported int
-		costKnown                     = len(in.Positions) > 0
+		held                          int
+		costKnown                     = true
 	)
 	for _, p := range in.Positions {
+		// The broker leaves a blocked position out of its equity and out of
+		// its unrealised result (…5519, 2026-09-11: equity equals the cash,
+		// unrealized 0.0 with FXRL at half its cost), so its day and its cost
+		// stay out of these figures, and holding one is holding nothing the
+		// broker values.
+		if p.Blocked {
+			continue
+		}
+		held++
+
 		conv := pnlConversion(p, lookupInstrument(in.Instruments, p), base, in.Rates)
 
 		if v, ok := ParseNumber(p.DailyPnL); ok {
@@ -122,7 +134,7 @@ func Valuation(in ValuationInput) Worth {
 		}
 	}
 
-	if dailyReported > 0 || len(in.Positions) == 0 {
+	if dailyReported > 0 || held == 0 {
 		w.Daily = finiteMetric(daily)
 	}
 	if marginReported > 0 {
@@ -138,7 +150,7 @@ func Valuation(in ValuationInput) Worth {
 
 	// An overflowed cost would divide the result down to a plausible-looking
 	// 0%, so it is refused along with an unknown one.
-	if w.Unrealized.Valid && costKnown && cost > 0 && !math.IsInf(cost, 0) {
+	if w.Unrealized.Valid && held > 0 && costKnown && cost > 0 && !math.IsInf(cost, 0) {
 		w.UnrealizedShare = finiteMetric(w.Unrealized.Value / cost)
 	}
 
