@@ -329,11 +329,17 @@ func createInfoLabel() *tview.TextView {
 	return label
 }
 
+// statusBarColour is the background of the status line at the bottom of the
+// screen. The Analytics history progress bar paints its empty part in it, so
+// the two strips read as the same material; one constant keeps them from
+// drifting apart.
+const statusBarColour = tcell.ColorDarkSlateGray
+
 // createStatusBar creates the status bar
 func createStatusBar() *tview.TextView {
 	bar := tview.NewTextView()
 	bar.SetTextAlign(tview.AlignLeft)
-	bar.SetBackgroundColor(tcell.ColorDarkSlateGray)
+	bar.SetBackgroundColor(statusBarColour)
 	bar.SetTextColor(tcell.ColorWhite)
 	return bar
 }

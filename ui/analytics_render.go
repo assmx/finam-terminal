@@ -467,6 +467,47 @@ func analyticsRule() *tview.Box {
 	return box
 }
 
+// historyLoadBar is what the Trades and Money screens show while the account's
+// history loads: one row as wide as its area, in the middle of it.
+//
+// It replaced a line of text over empty frames. The text had to be read, and
+// the eye went to the frames instead, which looked like a broken screen; a bar
+// is taken in at a glance and the emptiness around it reads as waiting.
+type historyLoadBar struct {
+	*tview.Box
+	fraction float64
+}
+
+func newHistoryLoadBar() *historyLoadBar {
+	return &historyLoadBar{Box: tview.NewBox().SetBackgroundColor(tcell.ColorBlack)}
+}
+
+// SetFraction sets how much of the pass is done, 0..1.
+func (b *historyLoadBar) SetFraction(fraction float64) {
+	b.fraction = fraction
+}
+
+// Fraction is how much of the pass the bar shows as done.
+func (b *historyLoadBar) Fraction() float64 {
+	return b.fraction
+}
+
+// Draw paints the background, then the bar across the middle row. The width
+// and the row are the draw pass's to decide: only it knows how much room the
+// sub-screen got.
+func (b *historyLoadBar) Draw(screen tcell.Screen) {
+	b.DrawForSubclass(screen, b)
+
+	x, y, width, height := b.GetInnerRect()
+	if width <= 0 || height <= 0 {
+		return
+	}
+	row := y + (height-1)/2
+	for i, c := range progressBarCells(b.fraction, width) {
+		screen.SetContent(x+i, row, c.Char, nil, tcell.StyleDefault.Foreground(c.Fg).Background(c.Bg))
+	}
+}
+
 // createAnalyticsPanel builds one bordered panel of a sub-screen.
 //
 // The border is dimmer than the numbers inside it and the title carries the

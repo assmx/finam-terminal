@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -204,6 +205,79 @@ func shareBar(share float64, width int) string {
 		}
 	}
 	return b.String()
+}
+
+// progressCell is one cell of the history progress bar.
+type progressCell struct {
+	Char rune
+	Fg   tcell.Color
+	Bg   tcell.Color
+}
+
+// Progress bar colours. The fill is yellow because yellow is what this tab
+// says "loading" in, and what marks the active screen in the tab strip above;
+// the empty part is the status line's colour, so the bar reads as a strip of
+// the same material as the one at the bottom of the screen.
+const (
+	progressFillColour  = tcell.ColorYellow
+	progressEmptyColour = statusBarColour
+)
+
+// progressBarCells lays a 0..1 share out over width cells: yellow fill, the
+// status-bar colour behind it, and the percentage centred on top.
+//
+// The fill is a background colour rather than a block glyph, so the bar is one
+// solid strip; only its edge is a glyph, a sub-cell block in yellow on the empty
+// colour, which gives the edge an eighth of a cell's resolution. A label glyph
+// is black over the fill and white over the empty part, and a partly filled
+// cell under it counts as filled once the fill covers half of it.
+//
+// The percentage is rounded down, so 100% appears only when every step is done
+// rather than at 99.6%. A bar with less room than the label plus a cell either
+// side shows the fill alone. A share outside [0, 1] is drawn as the nearest
+// end, and NaN as nothing done.
+func progressBarCells(fraction float64, width int) []progressCell {
+	if width <= 0 {
+		return nil
+	}
+	fraction = clampFraction(fraction)
+
+	filled := fraction * float64(width)
+	full := min(int(filled), width)
+	eighths := 0
+	if full < width {
+		eighths = int((filled - float64(full)) * 8)
+	}
+
+	cells := make([]progressCell, width)
+	for x := range cells {
+		switch {
+		case x < full:
+			cells[x] = progressCell{' ', tcell.ColorBlack, progressFillColour}
+		case x == full && eighths > 0:
+			cells[x] = progressCell{barBlocks[eighths], progressFillColour, progressEmptyColour}
+		default:
+			cells[x] = progressCell{' ', tcell.ColorWhite, progressEmptyColour}
+		}
+	}
+
+	// The nudge keeps a share that is a whole percentage from being printed one
+	// below it: 0.29 × 100 is 28.999… in float64. It is far smaller than the
+	// gap between two real steps of a pass, so it cannot turn 99% into 100%.
+	label := fmt.Sprintf("%d%%", int(math.Floor(fraction*100+1e-9)))
+	if width < len(label)+2 {
+		return cells
+	}
+	start := (width - len(label)) / 2
+	for i, r := range label {
+		x := start + i
+		if x < full || (x == full && eighths >= 4) {
+			cells[x] = progressCell{r, tcell.ColorBlack, progressFillColour}
+		} else {
+			cells[x] = progressCell{r, tcell.ColorWhite, progressEmptyColour}
+		}
+	}
+	return cells
 }
 
 // signedBar draws an amount against the largest magnitude beside it, coloured
