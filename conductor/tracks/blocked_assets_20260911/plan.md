@@ -14,7 +14,7 @@
   - Acceptance: юнит- и интеграционные тесты зелёные
 
 ## Phase 3: Пакет analytics
-- [~] Task: (Red→Green) `Structure` — заблокированное вне базы и всех разрезов, `BlockedCount`/`BlockedValue` (по цене брокера, по модулю, пересчёт по `RateTo`, без пересчёта — только в счётчике); `Valuation` — вне стоимости и дня, «ничего не держит» — по незаблокированным; `RatesToFetch`, `BondsNeedingFace`, `ExpectedPayouts` пропускают; табличные тесты и property-тест (заблокированные не двигают `Base`, `Groups`, `Currencies`, `Exposure`)
+- [x] Task: (Red→Green) `Structure` — заблокированное вне базы и всех разрезов, `BlockedCount`/`BlockedValue` (по цене брокера, по модулю, пересчёт по `RateTo`, без пересчёта — только в счётчике); `Valuation` — вне стоимости и дня, «ничего не держит» — по незаблокированным; `RatesToFetch`, `BondsNeedingFace`, `ExpectedPayouts` пропускают; табличные тесты и property-тест (заблокированные не двигают `Base`, `Groups`, `Currencies`, `Exposure`) (7cb230d)
   - Acceptance: тесты зелёные; покрытие пакета ≥ 80%
 
 ## Phase 4: UI
