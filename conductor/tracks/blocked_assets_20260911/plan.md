@@ -17,12 +17,12 @@
 - [x] Task: (Red→Green) `Structure` — заблокированное вне базы и всех разрезов, `BlockedCount`/`BlockedValue` (по цене брокера, по модулю, пересчёт по `RateTo`, без пересчёта — только в счётчике); `Valuation` — вне стоимости и дня, «ничего не держит» — по незаблокированным; `RatesToFetch`, `BondsNeedingFace`, `ExpectedPayouts` пропускают; табличные тесты и property-тест (заблокированные не двигают `Base`, `Groups`, `Currencies`, `Exposure`) (7cb230d)
   - Acceptance: тесты зелёные; покрытие пакета ≥ 80%
 
-## Phase 4: UI
+## Phase 4: UI [checkpoint: 28ef453]
 - [x] Task: (Red→Green) Positions — жёлтое `BLOCKED` в Value; «Структура портфеля» — строка `заблокировано: N · X RUB по цене брокера` (видна и без базы); `coveredByStream` не ждёт заблокированную позицию; обход «Выплат» её пропускает; тесты рендера, `coveredByStream`, счётчика календарей мок-клиента и 20 перерисовок «Обзора» без запросов с заблокированной позицией на счёте (d7021e6)
   - Acceptance: тесты зелёные; существующие ui-тесты не сломаны
 
 ## Phase 5: Документация и верификация
-- [ ] Task: Полная авто-проверка — `go build ./...`, `go vet ./...`, `go test ./...`, `go test -tags=integration ./api/...`, `CGO_ENABLED=1 go test -race` обеих сюит (без C-компилятора локально — гейт CI), `golangci-lint run ./...`, покрытие нового кода
+- [~] Task: Полная авто-проверка — `go build ./...`, `go vet ./...`, `go test ./...`, `go test -tags=integration ./api/...`, `CGO_ENABLED=1 go test -race` обеих сюит (без C-компилятора локально — гейт CI), `golangci-lint run ./...`, покрытие нового кода
   - Acceptance: нет ошибок и предупреждений, линтер чистый, покрытие нового кода ≥ 80%
 - [ ] Task: Документация — `docs/user_manual/analytics.md` (строка «заблокировано», что не входит в оценку и почему), `docs/user_manual/positions.md` (`BLOCKED` в Value), CLAUDE.md (`api/blocked.go`, `Position.Blocked`, изменения `Structure`/`Valuation`, защита потока, раздел разведки, testserver), CHANGELOG.md
   - Acceptance: документация соответствует реализации
