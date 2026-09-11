@@ -99,7 +99,9 @@ func (a *App) loadPayoutsAsync(accountID string) {
 
 		for i, p := range positions {
 			qty, ok := analytics.ParseNumber(p.Quantity)
-			if !ok || qty <= 0 {
+			// A blocked holding is in no forecast, so its calendar would buy
+			// nothing.
+			if !ok || qty <= 0 || p.Blocked {
 				continue
 			}
 

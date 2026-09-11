@@ -251,6 +251,7 @@ func renderStructure(a analytics.Allocation, width int) string {
 
 	if !a.Valid {
 		b.WriteString(notAvailable + " — в портфеле нет оценённых активов\n")
+		writeBlocked(&b, a)
 		return b.String()
 	}
 
@@ -265,6 +266,7 @@ func renderStructure(a analytics.Allocation, width int) string {
 	fmt.Fprintf(&b, "[white::b]%s[-:-:-]\n",
 		totalRow("Итого", formatNumber(a.Base, 0)+" "+a.BaseCurrency, width))
 
+	writeBlocked(&b, a)
 	if a.Skipped > 0 {
 		fmt.Fprintf(&b, "[yellow]без цены: %d[-]\n", a.Skipped)
 	}
@@ -273,6 +275,21 @@ func renderStructure(a analytics.Allocation, width int) string {
 	}
 
 	return b.String()
+}
+
+// writeBlocked says what the structure leaves out because the broker values it
+// at zero: how many blocked positions, and what they would be worth at the
+// broker's price when that can be said. The words run least important last, so
+// a narrow panel clips the explanation and keeps the figures.
+func writeBlocked(b *strings.Builder, a analytics.Allocation) {
+	if a.BlockedCount == 0 {
+		return
+	}
+	line := fmt.Sprintf("заблокировано: %d", a.BlockedCount)
+	if a.BlockedValue > 0 {
+		line += fmt.Sprintf(" · %s %s по цене брокера", formatNumber(a.BlockedValue, 0), a.BaseCurrency)
+	}
+	fmt.Fprintf(b, "[yellow]%s[-]\n", line)
 }
 
 // unresolvedFaceLabel names the row of bonds whose face is in another

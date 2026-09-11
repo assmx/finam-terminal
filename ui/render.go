@@ -137,7 +137,13 @@ func updatePositionsTable(app *App) {
 		// the broker's own price, which fills this column in for a position
 		// whose quote has not arrived yet instead of leaving it "N/A".
 		totalValue := "N/A"
-		if money := positionValue(p, quote, inst, base); money.Valid {
+		valueColor := tcell.ColorLightGreen
+		if p.Blocked {
+			// The broker values a blocked position at zero and leaves it out of
+			// the account's equity; an amount here would be one nobody can get.
+			totalValue = "BLOCKED"
+			valueColor = tcell.ColorYellow
+		} else if money := positionValue(p, quote, inst, base); money.Valid {
 			totalValue = withCurrency(fmt.Sprintf("%.2f", money.Value), money.Currency, base)
 		}
 
@@ -197,7 +203,7 @@ func updatePositionsTable(app *App) {
 		app.portfolioView.TabbedView.PositionsTable.SetCell(rowNum, 4, tview.NewTableCell(dailyPnL).
 			SetStyle(tcell.StyleDefault.Background(rowBg).Foreground(dailyColor)).SetAlign(tview.AlignRight))
 		app.portfolioView.TabbedView.PositionsTable.SetCell(rowNum, 5, tview.NewTableCell(totalValue).
-			SetStyle(tcell.StyleDefault.Background(rowBg).Foreground(tcell.ColorLightGreen)).SetAlign(tview.AlignRight))
+			SetStyle(tcell.StyleDefault.Background(rowBg).Foreground(valueColor)).SetAlign(tview.AlignRight))
 		app.portfolioView.TabbedView.PositionsTable.SetCell(rowNum, 6, tview.NewTableCell(unrealizedPnL).
 			SetStyle(tcell.StyleDefault.Background(rowBg).Foreground(unrealColor)).SetAlign(tview.AlignRight))
 	}
