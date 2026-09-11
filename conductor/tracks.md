@@ -226,3 +226,15 @@ This file tracks all major tracks for the project. Each track has its own detail
 *Plan: [./tracks/blocked_assets_20260911/plan.md](./tracks/blocked_assets_20260911/plan.md)*
 *Phases: 5 | Tasks: 8*
 *Depends on: analytics_currency_20260910*
+
+
+---
+
+
+- [ ] **Track: Analytics — полоса прогресса загрузки истории на «Сделках» и «Деньгах»**
+
+*Link: [./tracks/analytics_loading_bar_20260911/](./tracks/analytics_loading_bar_20260911/)*
+*Spec: [./tracks/analytics_loading_bar_20260911/spec.md](./tracks/analytics_loading_bar_20260911/spec.md)*
+*Plan: [./tracks/analytics_loading_bar_20260911/plan.md](./tracks/analytics_loading_bar_20260911/plan.md)*
+*Phases: 3 | Tasks: 7*
+*Depends on: analytics_history_20260903*
