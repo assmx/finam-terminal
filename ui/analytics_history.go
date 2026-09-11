@@ -117,17 +117,20 @@ func (a *App) refreshHistoryTail() {
 	a.loadAnalyticsHistoryAsync(account, hasHistory)
 }
 
-// loadHistoryAsync walks the account off the event loop.
+// loadAnalyticsHistoryAsync walks the account off the event loop.
 //
-// tail asks for the newest day only; a full pass covers the account's whole
-// life. Both take the application's context, so shutting down cancels a walk
-// in flight rather than leaving it running against a closed screen.
+// tail asks for the newest day only and leaves the index comparison alone; a
+// full pass covers the account's whole life and measures the index over it.
+// Both take the application's context, so shutting down cancels a walk in
+// flight rather than leaving it running against a closed screen.
 func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 	now := time.Now()
 	req := historyHorizon(account, now)
+	barTotal := benchmarkSteps
 	if tail {
 		req.TradesFrom = now.Add(-historyTailWindow)
 		req.TransactionsFrom = now.Add(-historyTailWindow)
+		barTotal = 0
 	}
 	if req.TradesFrom.IsZero() && req.TransactionsFrom.IsZero() {
 		// Nothing is known about when this account's history starts, so there
@@ -144,7 +147,7 @@ func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 	}
 	data.loading = true
 	data.historyErr = ""
-	data.load = historyLoad{}
+	data.load = historyLoad{barTotal: barTotal}
 	a.dataMutex.Unlock()
 
 	// The bar goes up at once, empty: the first report may be a quota check
@@ -159,12 +162,20 @@ func (a *App) loadAnalyticsHistoryAsync(account models.AccountInfo, tail bool) {
 			a.queueDraw(func() { updateAnalyticsHistoryScreens(a) })
 		})
 
-		benchmark, benchmarkOK := a.loadBenchmark(account.ID, req, bundle, func() {
-			a.dataMutex.Lock()
-			data.load.bars++
-			a.dataMutex.Unlock()
-			a.queueDraw(func() { updateAnalyticsHistoryScreens(a) })
-		})
+		// The comparison is drawn beside the account's whole-life result, so only
+		// a full pass measures it. A top-up's horizon is one day: its bars would
+		// buy that day's move and pass it off as the same period, while the
+		// whole-life comparison barely moves in a day.
+		var benchmark analytics.Benchmark
+		benchmarkOK := false
+		if !tail {
+			benchmark, benchmarkOK = a.loadBenchmark(account.ID, req, bundle, func() {
+				a.dataMutex.Lock()
+				data.load.bars++
+				a.dataMutex.Unlock()
+				a.queueDraw(func() { updateAnalyticsHistoryScreens(a) })
+			})
+		}
 
 		a.dataMutex.Lock()
 		data.loading = false
@@ -305,6 +316,7 @@ type historyLoad struct {
 	windows     int // finished history windows, HistoryProgress.Done
 	windowTotal int // windows the pass can take, HistoryProgress.Total; 0 until the first report
 	bars        int // bar requests answered
+	barTotal    int // bar requests the pass makes: benchmarkSteps for a full pass, none for a top-up
 }
 
 // historyLoadFraction is the share of a pass that is done, in [0, 1].
@@ -315,7 +327,7 @@ type historyLoad struct {
 // need to: the screen that explains the stop replaces the bar the moment the
 // pass ends.
 func historyLoadFraction(l historyLoad) float64 {
-	steps := l.windowTotal + benchmarkSteps
+	steps := l.windowTotal + l.barTotal
 	if steps <= 0 {
 		return 0
 	}

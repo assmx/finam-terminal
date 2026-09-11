@@ -565,6 +565,57 @@ func TestHistory_FailedBarRequestIsStillAStep(t *testing.T) {
 	}
 }
 
+// TestHistory_TopUpKeepsTheSinceOpenBenchmark: the index comparison is drawn
+// beside the account's whole-life result under «IMOEX за тот же период», so it
+// is measured over the whole life. R re-reads one day; it must neither spend
+// the two bar requests again nor replace the comparison with that day's move.
+func TestHistory_TopUpKeepsTheSinceOpenBenchmark(t *testing.T) {
+	mock := historyMock()
+	// Every window answers a bar at each of its ends, so any horizon — a day
+	// included — yields a comparison; and every request answers its own close,
+	// so a replaced comparison cannot pass for the first one.
+	closes := []float64{1000, 1250, 2000, 2010}
+	var calls atomic.Int64
+	mock.GetBarsFunc = func(_ string, _ string, _ marketdata.TimeFrame, from, to time.Time) ([]models.Bar, error) {
+		n := int(calls.Add(1))
+		price := closes[len(closes)-1]
+		if n <= len(closes) {
+			price = closes[n-1]
+		}
+		return []models.Bar{{Timestamp: from, Close: price}, {Timestamp: to, Close: price}}, nil
+	}
+
+	app, capture := historyApp(t, mock)
+	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
+	waitHistory(t, app, mock, 1)
+
+	app.dataMutex.RLock()
+	first, firstOK := app.analytics.byAccount["acc1"].benchmark, app.analytics.byAccount["acc1"].benchmarkOK
+	app.dataMutex.RUnlock()
+	if !firstOK || math.Abs(first.Cumulative-0.25) > 1e-9 || !first.AnnualValid {
+		t.Fatalf("the first pass's benchmark = %+v (ok %v), want +25%% with an annual rate", first, firstOK)
+	}
+
+	app.dataMutex.Lock()
+	app.analytics.byAccount["acc1"].historyAt = time.Now().Add(-2 * analyticsRefreshCooldown)
+	app.dataMutex.Unlock()
+
+	capture(tcell.NewEventKey(tcell.KeyRune, 'R', tcell.ModNone))
+	waitHistory(t, app, mock, 2)
+
+	if n := mock.GetBarsCalls.Load(); n != 2 {
+		t.Errorf("GetBars called %d times after R, want 2 — a top-up costs no bar request", n)
+	}
+
+	app.dataMutex.RLock()
+	after, afterOK := app.analytics.byAccount["acc1"].benchmark, app.analytics.byAccount["acc1"].benchmarkOK
+	app.dataMutex.RUnlock()
+	if !afterOK || math.Abs(after.Cumulative-first.Cumulative) > 1e-9 ||
+		after.AnnualValid != first.AnnualValid || !after.FirstAt.Equal(first.FirstAt) {
+		t.Errorf("after R the benchmark = %+v (ok %v), want the whole-life one kept: %+v", after, afterOK, first)
+	}
+}
+
 // TestHistoryHorizon covers the window one pass covers, including the case the
 // broker actually produces: money arrives before the first purchase.
 func TestHistoryHorizon(t *testing.T) {
@@ -658,25 +709,29 @@ func TestHistoryStatusText(t *testing.T) {
 }
 
 // TestHistoryLoadFraction measures a pass in the steps that take real time:
-// the walk's windows and the benchmark's two bar windows after it.
+// the walk's windows and, on a full pass, the benchmark's two bar windows after
+// it. A top-up requests no bars, so its windows are the whole of it.
 func TestHistoryLoadFraction(t *testing.T) {
 	cases := []struct {
 		name string
 		load historyLoad
 		want float64
 	}{
-		{"before the first report", historyLoad{}, 0},
-		{"total known, nothing done", historyLoad{windowTotal: 3}, 0},
-		{"one window of three", historyLoad{windows: 1, windowTotal: 3}, 0.2},
-		{"every window, no bars yet", historyLoad{windows: 3, windowTotal: 3}, 0.6},
-		{"every window and one bar window", historyLoad{windows: 3, windowTotal: 3, bars: 1}, 0.8},
-		{"the whole pass", historyLoad{windows: 3, windowTotal: 3, bars: 2}, 1},
-		{"stopped short, bars after", historyLoad{windows: 1, windowTotal: 3, bars: 2}, 0.6},
-		{"a pass that reported no window", historyLoad{bars: 1}, 0.5},
-		{"more done than the total is clamped", historyLoad{windows: 9, windowTotal: 3, bars: 2}, 1},
-		{"more bars than asked for is clamped", historyLoad{windows: 3, windowTotal: 3, bars: 5}, 1},
-		{"a negative count is clamped", historyLoad{windows: -4, windowTotal: 3}, 0},
-		{"a negative total is not divided by", historyLoad{windows: 1, windowTotal: -9}, 0},
+		{"before the first report", historyLoad{barTotal: 2}, 0},
+		{"total known, nothing done", historyLoad{windowTotal: 3, barTotal: 2}, 0},
+		{"one window of three", historyLoad{windows: 1, windowTotal: 3, barTotal: 2}, 0.2},
+		{"every window, no bars yet", historyLoad{windows: 3, windowTotal: 3, barTotal: 2}, 0.6},
+		{"every window and one bar window", historyLoad{windows: 3, windowTotal: 3, bars: 1, barTotal: 2}, 0.8},
+		{"the whole pass", historyLoad{windows: 3, windowTotal: 3, bars: 2, barTotal: 2}, 1},
+		{"stopped short, bars after", historyLoad{windows: 1, windowTotal: 3, bars: 2, barTotal: 2}, 0.6},
+		{"a pass that reported no window", historyLoad{bars: 1, barTotal: 2}, 0.5},
+		{"a top-up before the first report", historyLoad{}, 0},
+		{"a top-up halfway", historyLoad{windows: 1, windowTotal: 2}, 0.5},
+		{"a whole top-up", historyLoad{windows: 2, windowTotal: 2}, 1},
+		{"more done than the total is clamped", historyLoad{windows: 9, windowTotal: 3, bars: 2, barTotal: 2}, 1},
+		{"more bars than asked for is clamped", historyLoad{windows: 3, windowTotal: 3, bars: 5, barTotal: 2}, 1},
+		{"a negative count is clamped", historyLoad{windows: -4, windowTotal: 3, barTotal: 2}, 0},
+		{"a negative total is not divided by", historyLoad{windows: 1, windowTotal: -9, barTotal: 2}, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -687,32 +742,38 @@ func TestHistoryLoadFraction(t *testing.T) {
 	}
 }
 
-// TestHistoryLoadFraction_OnlyMovesForward walks every pass length step by step:
-// each step moves the bar forward, and a pass that ran to the end fills it.
+// TestHistoryLoadFraction_OnlyMovesForward walks every pass length step by step,
+// full passes and top-ups alike: each step moves the bar forward, and a pass
+// that ran to the end fills it.
 func TestHistoryLoadFraction_OnlyMovesForward(t *testing.T) {
-	for total := 0; total <= 12; total++ {
-		prev := historyLoadFraction(historyLoad{})
-		if prev != 0 {
-			t.Fatalf("total %d: the bar starts at %v, want 0", total, prev)
-		}
-
-		steps := []historyLoad{}
-		for done := 1; done <= total; done++ {
-			steps = append(steps, historyLoad{windows: done, windowTotal: total})
-		}
-		for bars := 1; bars <= benchmarkSteps; bars++ {
-			steps = append(steps, historyLoad{windows: total, windowTotal: total, bars: bars})
-		}
-
-		for _, s := range steps {
-			got := historyLoadFraction(s)
-			if got <= prev {
-				t.Errorf("total %d: step %+v shows %v after %v, want it further on", total, s, got, prev)
+	for _, barTotal := range []int{benchmarkSteps, 0} {
+		for total := 0; total <= 12; total++ {
+			if total+barTotal == 0 {
+				continue // a pass with no step at all has nothing to fill
 			}
-			prev = got
-		}
-		if prev != 1 {
-			t.Errorf("total %d: a finished pass ends at %v, want 1", total, prev)
+			prev := historyLoadFraction(historyLoad{barTotal: barTotal})
+			if prev != 0 {
+				t.Fatalf("total %d, bars %d: the bar starts at %v, want 0", total, barTotal, prev)
+			}
+
+			steps := []historyLoad{}
+			for done := 1; done <= total; done++ {
+				steps = append(steps, historyLoad{windows: done, windowTotal: total, barTotal: barTotal})
+			}
+			for bars := 1; bars <= barTotal; bars++ {
+				steps = append(steps, historyLoad{windows: total, windowTotal: total, bars: bars, barTotal: barTotal})
+			}
+
+			for _, s := range steps {
+				got := historyLoadFraction(s)
+				if got <= prev {
+					t.Errorf("total %d, bars %d: step %+v shows %v after %v, want it further on", total, barTotal, s, got, prev)
+				}
+				prev = got
+			}
+			if prev != 1 {
+				t.Errorf("total %d, bars %d: a finished pass ends at %v, want 1", total, barTotal, prev)
+			}
 		}
 	}
 }
@@ -821,6 +882,57 @@ func TestHistory_RefreshStartsTheBarAgain(t *testing.T) {
 	defer mu.Unlock()
 	if atStart != 0 {
 		t.Errorf("the refresh bar starts at %v, want 0 — the previous pass ended full", atStart)
+	}
+}
+
+// TestHistory_TopUpBarRunsToTheEnd: a top-up requests no bars, so its bar is
+// measured in windows alone. With the full pass's two bar steps still in its
+// total, the bar would stop at a third and vanish.
+func TestHistory_TopUpBarRunsToTheEnd(t *testing.T) {
+	mock := historyMock()
+	app, capture := historyApp(t, mock)
+
+	capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
+	waitHistory(t, app, mock, 1)
+
+	app.dataMutex.Lock()
+	app.analytics.byAccount["acc1"].historyAt = time.Now().Add(-2 * analyticsRefreshCooldown)
+	app.dataMutex.Unlock()
+
+	mock.LoadHistoryProgress = []api.HistoryProgress{{Done: 1, Total: 1}}
+	var mu sync.Mutex
+	var seen []float64
+	mock.LoadHistoryObserve = func() {
+		app.dataMutex.RLock()
+		fraction := historyLoadFraction(app.analytics.byAccount["acc1"].load)
+		app.dataMutex.RUnlock()
+
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, fraction)
+	}
+
+	capture(tcell.NewEventKey(tcell.KeyRune, 'R', tcell.ModNone))
+	waitHistory(t, app, mock, 2)
+
+	app.dataMutex.RLock()
+	final := historyLoadFraction(app.analytics.byAccount["acc1"].load)
+	app.dataMutex.RUnlock()
+
+	mu.Lock()
+	got := append(append([]float64(nil), seen...), final)
+	mu.Unlock()
+
+	// Before the one report, after it, and once the pass is over.
+	want := []float64{0, 1, 1}
+	if len(got) != len(want) {
+		t.Fatalf("fractions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 1e-9 {
+			t.Errorf("fractions = %v, want %v", got, want)
+			break
+		}
 	}
 }
 
