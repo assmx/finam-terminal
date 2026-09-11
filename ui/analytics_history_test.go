@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -514,6 +515,53 @@ func TestHistory_BenchmarkFailureIsNotFatal(t *testing.T) {
 	}
 	if benchOK {
 		t.Error("the benchmark reports success after a failed request")
+	}
+}
+
+// TestHistory_FailedBarRequestIsStillAStep: a bar request took its time
+// whether or not it succeeded, so the progress counts it either way. A first
+// window that fails stops the benchmark there — the second is never asked for
+// and never counted.
+func TestHistory_FailedBarRequestIsStillAStep(t *testing.T) {
+	cases := []struct {
+		name     string
+		failCall int64
+		wantBars int
+	}{
+		{"the second window fails", 2, 2},
+		{"the first window fails", 1, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mock := historyMock()
+			bars := mock.GetBarsFunc
+			var calls atomic.Int64
+			mock.GetBarsFunc = func(accountID, symbol string, tf marketdata.TimeFrame, from, to time.Time) ([]models.Bar, error) {
+				if calls.Add(1) == c.failCall {
+					return nil, context.DeadlineExceeded
+				}
+				return bars(accountID, symbol, tf, from, to)
+			}
+
+			app, capture := historyApp(t, mock)
+			capture(tcell.NewEventKey(tcell.KeyRune, '2', tcell.ModNone))
+			waitHistory(t, app, mock, 1)
+
+			app.dataMutex.RLock()
+			data := app.analytics.byAccount["acc1"]
+			gotBars, benchOK := data.load.bars, data.benchmarkOK
+			app.dataMutex.RUnlock()
+
+			if gotBars != c.wantBars {
+				t.Errorf("bar steps counted = %d, want %d", gotBars, c.wantBars)
+			}
+			if benchOK {
+				t.Error("the benchmark reports success after a failed bar request")
+			}
+			if n := mock.GetBarsCalls.Load(); n != int64(c.wantBars) {
+				t.Errorf("GetBars called %d times, want %d", n, c.wantBars)
+			}
+		})
 	}
 }
 
