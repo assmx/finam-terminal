@@ -334,4 +334,3 @@ func (a *App) selectedIndexSymbol() string {
 	}
 	return constituents[idx].Symbol
 }
-

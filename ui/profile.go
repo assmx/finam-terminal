@@ -154,9 +154,12 @@ func (p *ProfilePanel) renderInfoPanel() {
 		} else if d.BondFaceValue != "" {
 			// Bonds
 			sb.WriteString("[cyan::b]─── Bond ───[-:-:-]\n")
+			// The face alone when its currency is unknown: the Currency row
+			// above is the settlement currency, which for a replacement bond
+			// is RUB although its face is in dollars.
 			faceVal := d.BondFaceValue
-			if d.BondFaceCurrency != "" {
-				faceVal += " " + d.BondFaceCurrency
+			if p.profile.BondFaceCurrency != "" {
+				faceVal += " " + p.profile.BondFaceCurrency
 			}
 			writeField(&sb, "Face Value", faceVal)
 			sb.WriteString("\n")

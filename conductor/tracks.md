@@ -179,3 +179,62 @@ This file tracks all major tracks for the project. Each track has its own detail
 *Spec: [./tracks/index_tab_20260826/spec.md](./tracks/index_tab_20260826/spec.md)*
 *Plan: [./tracks/index_tab_20260826/plan.md](./tracks/index_tab_20260826/plan.md)*
 *Phases: 6 | Tasks: 16*
+
+
+---
+
+
+- [ ] **Track: Вкладка Analytics — обзор портфеля, маржа и риск, квоты API**
+
+*Link: [./tracks/analytics_overview_20260903/](./tracks/analytics_overview_20260903/)*
+*Spec: [./tracks/analytics_overview_20260903/spec.md](./tracks/analytics_overview_20260903/spec.md)*
+*Plan: [./tracks/analytics_overview_20260903/plan.md](./tracks/analytics_overview_20260903/plan.md)*
+*Phases: 5 | Tasks: 15*
+
+
+---
+
+
+- [ ] **Track: Analytics — история сделок, деньги, выплаты, бенчмарк IMOEX**
+
+*Link: [./tracks/analytics_history_20260903/](./tracks/analytics_history_20260903/)*
+*Spec: [./tracks/analytics_history_20260903/spec.md](./tracks/analytics_history_20260903/spec.md)*
+*Plan: [./tracks/analytics_history_20260903/plan.md](./tracks/analytics_history_20260903/plan.md)*
+*Phases: 7 | Tasks: 21*
+*Depends on: analytics_overview_20260903*
+
+
+---
+
+
+- [ ] **Track: Analytics — валюты: оценка иностранных активов и структура портфеля по валюте**
+
+*Link: [./tracks/analytics_currency_20260910/](./tracks/analytics_currency_20260910/)*
+*Spec: [./tracks/analytics_currency_20260910/spec.md](./tracks/analytics_currency_20260910/spec.md)*
+*Plan: [./tracks/analytics_currency_20260910/plan.md](./tracks/analytics_currency_20260910/plan.md)*
+*Phases: 5 | Tasks: 14*
+*Depends on: analytics_overview_20260903, analytics_history_20260903*
+
+
+---
+
+
+- [ ] **Track: Заблокированные активы — распознавание, оценка вне базы, защита от зависающих запросов**
+
+*Link: [./tracks/blocked_assets_20260911/](./tracks/blocked_assets_20260911/)*
+*Spec: [./tracks/blocked_assets_20260911/spec.md](./tracks/blocked_assets_20260911/spec.md)*
+*Plan: [./tracks/blocked_assets_20260911/plan.md](./tracks/blocked_assets_20260911/plan.md)*
+*Phases: 5 | Tasks: 8*
+*Depends on: analytics_currency_20260910*
+
+
+---
+
+
+- [ ] **Track: Analytics — полоса прогресса загрузки истории на «Сделках» и «Деньгах»**
+
+*Link: [./tracks/analytics_loading_bar_20260911/](./tracks/analytics_loading_bar_20260911/)*
+*Spec: [./tracks/analytics_loading_bar_20260911/spec.md](./tracks/analytics_loading_bar_20260911/spec.md)*
+*Plan: [./tracks/analytics_loading_bar_20260911/plan.md](./tracks/analytics_loading_bar_20260911/plan.md)*
+*Phases: 3 | Tasks: 7*
+*Depends on: analytics_history_20260903*

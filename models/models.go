@@ -22,6 +22,14 @@ type OrderParams struct {
 	StopPrice  float64 // Required for Stop-Loss and Take-Profit orders
 }
 
+// CashBalance is one currency line of GetAccountResponse.cash — the account's
+// own money, excluding anything borrowed on margin. A negative Amount means the
+// broker is lending in that currency.
+type CashBalance struct {
+	Currency string
+	Amount   float64
+}
+
 // AccountInfo represents account information from Finam API
 type AccountInfo struct {
 	ID            string
@@ -31,6 +39,23 @@ type AccountInfo struct {
 	UnrealizedPnL string
 	OpenDate      time.Time
 	LoadError     string // Non-empty if account failed to load from broker
+
+	// Portfolio composition and margin, from the GetAccountResponse.portfolio
+	// oneof. Which numbers exist depends on the kind, so HasMarginData says
+	// whether they mean anything: MCT is an empty message in the proto and an
+	// absent oneof carries nothing at all, and in both cases a zero here is
+	// "not reported", never "zero roubles".
+	PortfolioKind     string        // "MC", "MCT", "FORTS"; empty when the oneof is absent
+	Cash              []CashBalance // GetAccountResponse.cash, own money by currency
+	AvailableCash     float64       // MC.available_cash or FORTS.available_cash
+	InitialMargin     float64       // MC.initial_margin
+	MaintenanceMargin float64       // MC.maintenance_margin
+	MoneyReserved     float64       // FORTS.money_reserved
+	HasMarginData     bool          // true when the oneof is MC or FORTS
+
+	// Zero time when the broker sends no date.
+	FirstTradeDate    time.Time
+	FirstNonTradeDate time.Time
 }
 
 // Position represents a trading position
@@ -46,6 +71,17 @@ type Position struct {
 	DailyPnL      string
 	UnrealizedPnL string
 	TotalValue    string
+
+	// MaintenanceMargin is the collateral the broker holds against the
+	// position. It is filled for FORTS positions only; every other position
+	// carries "N/A", which means "not reported" rather than zero.
+	MaintenanceMargin string
+
+	// Blocked says the broker holds the position on a blocked venue and values
+	// it at zero: it is not in the account's equity, and asking about it hangs
+	// (LastQuote, GetAssetParams) or silences a quote subscription. The API
+	// layer sets it from the bulk asset list, never from a request.
+	Blocked bool
 }
 
 // GetCloseDirection returns the inverse direction needed to close the position.
@@ -96,6 +132,10 @@ type SecurityInfo struct {
 	Name     string
 	Lot      float64
 	Currency string
+	// Type is Asset.Type verbatim, as the bulk asset list reports it
+	// (EQUITIES, BONDS, FUNDS, FUTURES, OPTIONS, CURRENCIES, INDICES,
+	// SPREADS, SWAPS, OTHER). Empty when the API sent none.
+	Type string
 }
 
 // Trade represents a trade in history
@@ -124,22 +164,21 @@ type Bar struct {
 
 // AssetDetails represents detailed instrument information from GetAsset API
 type AssetDetails struct {
-	Board            string
-	ID               string
-	Ticker           string
-	MIC              string
-	ISIN             string
-	Type             string
-	Name             string
-	Decimals         int32
-	MinStep          int64
-	LotSize          string
-	ExpirationDate   string // formatted date string, empty if not applicable
-	QuoteCurrency    string
-	ContractSize     string // formatted contract size (futures, options)
-	Strike           string // formatted strike price (options only)
-	BondFaceValue    string // formatted face value (bonds only)
-	BondFaceCurrency string // currency of face value (bonds only)
+	Board          string
+	ID             string
+	Ticker         string
+	MIC            string
+	ISIN           string
+	Type           string
+	Name           string
+	Decimals       int32
+	MinStep        int64
+	LotSize        string
+	ExpirationDate string // formatted date string, empty if not applicable
+	QuoteCurrency  string
+	ContractSize   string // formatted contract size (futures, options)
+	Strike         string // formatted strike price (options only)
+	BondFaceValue  string // formatted face value (bonds only)
 }
 
 // AssetParams represents trading parameters for an instrument
@@ -155,6 +194,48 @@ type AssetParams struct {
 	// (GetAssetParams.trade_lot_size, Trade API 2.18.1). Zero means the API has
 	// no value for this instrument and callers fall back to the asset lot size.
 	TradeLotSize int64
+}
+
+// InstrumentCurrency is what GetAsset says about an instrument's money.
+//
+// Quote is quote_currency: the currency the instrument is priced and settled
+// in. FaceValue is the bond face value its price is a percentage of, and 0 for
+// anything that is not a bond or a bond whose face the broker did not report.
+//
+// There is deliberately no face currency. GetAsset's bond_details.currency is
+// "%" on every bond observed (2026-09-10), the replacement bond with a USD face
+// included: it names the unit of the price, not the currency of the face. The
+// face currency lives only in the bond calendar.
+type InstrumentCurrency struct {
+	Quote     string
+	FaceValue float64
+}
+
+// UnitValue is the value of one piece of an instrument in the currency it
+// settles in, as implied by the margin the broker asks to open a position:
+// long_initial_margin × 100 / long_risk_rate / trade_lot_size.
+//
+// For a bond it is the dirty price — face, accrued interest and, for a bond
+// with a foreign face settled in roubles, the conversion are all already
+// applied. It is fixed at the moment of the GetAssetParams call, so it is a
+// check and a fallback, not a live price.
+type UnitValue struct {
+	Currency string
+	Value    float64
+}
+
+// FXRate is the price of one unit of a currency in roubles, read from the
+// quote of its pair to the rouble.
+//
+// Every pair the terminal reads is quoted against the rouble, so Rate is
+// always roubles per unit; the analytics layer derives a cross rate for an
+// account whose base currency is something else. At is the time of the quote
+// the rate came from — the last trade, which after the close can be hours old
+// — and zero when the broker sent none.
+type FXRate struct {
+	Currency string
+	Rate     float64
+	At       time.Time
 }
 
 // TradingSession represents a single trading session window
@@ -178,6 +259,10 @@ type Dividend struct {
 	Amount   string // amount per share
 	Currency string
 	IsFuture bool
+
+	// When is the same date as an instant, so the payout screen can sort and
+	// filter without reparsing Date. Zero when the API sent no usable date.
+	When time.Time
 }
 
 // Split represents a single stock split event (past or future) for an equity.
@@ -201,6 +286,9 @@ type BondEvent struct {
 	Value    string // primary value (coupon amount, amortization value, offer price)
 	Currency string
 	IsFuture bool
+
+	// When is Date as an instant; zero when the API sent no usable date.
+	When time.Time
 
 	// Coupon details (Kind == BondEventCoupon)
 	RecordDate string
@@ -231,6 +319,11 @@ type InstrumentProfile struct {
 	Dividends  []Dividend
 	Splits     []Split
 	BondEvents []BondEvent
+	// BondFaceCurrency is the ISO code of a bond's face currency, as the bond
+	// calendar names it; "" when the calendar did not load or names none. It is
+	// not in Details because GetAsset does not report it: bond_details.currency
+	// is "%" on every bond, the unit of the price.
+	BondFaceCurrency string
 }
 
 // Order represents an active order
@@ -269,4 +362,50 @@ type IndexConstituent struct {
 	Name   string
 	Sector string
 	Weight float64
+}
+
+// QuotaUsage is one row of UsageMetricsService.GetUsageMetrics: how many calls
+// of one API method are left in the current window.
+//
+// Name is the method as the API spells it ("AccountsService.getAccount").
+// ResetAt is the zero time when the API sends no reset_time, which is the
+// normal state for a quota nothing has spent in this window — so a renderer
+// must show a dash there rather than a countdown.
+type QuotaUsage struct {
+	Name      string
+	Limit     int64
+	Remaining int64
+	ResetAt   time.Time
+}
+
+// TransactionTrade is the trade a transaction reflects, when it reflects one.
+//
+// A transaction carrying this is the money side of a deal the Trades method
+// already reports, so cash-flow grouping must keep it out of the totals — the
+// realised result is computed from the trades themselves and would otherwise
+// be counted twice.
+type TransactionTrade struct {
+	Size            float64
+	Price           float64
+	AccruedInterest float64
+}
+
+// Transaction is one row of AccountsService.Transactions: a single movement of
+// money or securities on the account.
+//
+// Category is the name of the TransactionCategory enum value ("DEPOSIT",
+// "COMMISSION", …) rather than the free-text category field, so grouping can
+// switch on a closed set. Amount keeps the sign the API sent — a charge is
+// negative — and ChangeQty carries the securities count, which only a TRANSFER
+// populates.
+type Transaction struct {
+	ID        string
+	Timestamp time.Time
+	Symbol    string
+	Category  string
+	Name      string
+	Amount    float64
+	Currency  string
+	ChangeQty float64
+	Trade     *TransactionTrade
 }

@@ -16,6 +16,10 @@ type MockAssetsServer struct {
 	// GetAssetError, if set, is returned by GetAsset.
 	GetAssetError error
 
+	// AssetsCallCount counts bulk list calls. The whole Analytics budget rests
+	// on this staying at one per session, so tests assert on it.
+	AssetsCallCount atomic.Int64
+
 	// GetAssetCallCount and GetAssetParamsCallCount count the lot-resolution
 	// calls, so a test can prove a quote request does not drag them along.
 	GetAssetCallCount       atomic.Int64
@@ -53,6 +57,7 @@ func NewMockAssetsServer() *MockAssetsServer {
 
 // Assets returns the bulk asset list.
 func (m *MockAssetsServer) Assets(_ context.Context, _ *assets.AssetsRequest) (*assets.AssetsResponse, error) {
+	m.AssetsCallCount.Add(1)
 	return &assets.AssetsResponse{
 		Assets: DefaultAssets(),
 	}, nil

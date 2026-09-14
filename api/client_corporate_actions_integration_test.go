@@ -165,3 +165,35 @@ func TestIntegration_GetBondEvents(t *testing.T) {
 		t.Errorf("offer IsFuture: expected true")
 	}
 }
+
+// TestIntegration_BondEventsCarryNoInterval pins the shape of the request, not
+// just its outcome.
+//
+// The live API refuses GetPastBondsEvents with a date_to of today
+// (`InvalidArgument: Invalid arguments:date_to`), which is exactly what the
+// shared pastYearRange() produces — so every bond in a real portfolio failed
+// its calendar and contributed nothing to the payout forecast, while the
+// screen reported one unexplained line naming the instrument. The mock now
+// enforces that validation, and this test says out loud what the fix is: the
+// request carries no interval at all, which the proto documents as a one-year
+// default and which the live API answered with the identical set of events.
+func TestIntegration_BondEventsCarryNoInterval(t *testing.T) {
+	client, ts := setupTestServer(t)
+
+	if _, err := client.GetBondEvents("SU26238@TQOB"); err != nil {
+		t.Fatalf("GetBondEvents error: %v", err)
+	}
+
+	req := ts.CorporateActions.LastPastBondEventsRequest.Load()
+	if req == nil {
+		t.Fatal("GetPastBondsEvents was never called")
+	}
+	if req.GetDateTo() != nil {
+		t.Errorf("the request carried date_to = %v; the broker refuses any date_to that is not strictly in the past",
+			req.GetDateTo())
+	}
+	if req.GetDateFrom() != nil {
+		t.Errorf("the request carried date_from = %v; the interval is left to the server's documented one-year default",
+			req.GetDateFrom())
+	}
+}

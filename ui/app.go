@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"finam-terminal/api"
 	"finam-terminal/models"
 
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
@@ -57,24 +59,54 @@ type APIClient interface {
 	// Index composition (GetConstituents, cached per session)
 	GetIndexConstituents(indexSymbol string) ([]models.IndexConstituent, error)
 
-	// Corporate action calendars
+	// Analytics. GetInstrumentType is a pure read of the startup asset cache
+	// and issues no request, so the overview may call it on every tick.
+	GetInstrumentType(symbol string) string
+
+	// Currency. GetInstrumentCurrency, GetUnitValue and BondFaceCurrencyCached
+	// are pure cache reads filled by requests the terminal already makes (lot
+	// resolution, instrument profile, the payout calendars), so the overview
+	// may call them on every tick. GetBondFaceCurrency may cost a calendar
+	// request and GetFXRates one LastQuote per currency: both run off the
+	// event loop, on a schedule, and never on a redraw.
+	GetInstrumentCurrency(symbol string) (models.InstrumentCurrency, bool)
+	GetUnitValue(symbol string) (models.UnitValue, bool)
+	BondFaceCurrencyCached(symbol string) (string, bool)
+	GetBondFaceCurrency(symbol string) (string, error)
+	GetFXRates(currencies []string) (map[string]models.FXRate, error)
+
+	// Corporate action calendars. Cached per symbol for a day, so a repeat
+	// lookup inside that window costs no request.
 	GetDividends(symbol string) ([]models.Dividend, error)
 	GetSplits(symbol string) ([]models.Split, error)
 	GetBondEvents(symbol string) ([]models.BondEvent, error)
+
+	// LoadHistory walks an account's trades and transactions backwards in
+	// chunks. It is the most expensive call in the terminal — dozens of
+	// requests for an old account — so it runs once per account per session,
+	// off the event loop, and never on a timer. The context is the
+	// application's, so a shutdown cancels a pass in flight.
+	LoadHistory(ctx context.Context, req api.HistoryRequest, progress func(api.HistoryProgress)) (*api.HistoryBundle, error)
 }
 
 // App represents the TUI application
 type App struct {
-	app           *tview.Application
-	client        APIClient
-	accounts      []models.AccountInfo
-	positions     map[string][]models.Position
-	history       map[string][]models.Trade
-	activeOrders  map[string][]models.Order
-	quotes        map[string]map[string]*models.Quote
-	selectedIdx   int
-	dataMutex     DataMutex
-	stopChan      chan struct{}
+	app          *tview.Application
+	client       APIClient
+	accounts     []models.AccountInfo
+	positions    map[string][]models.Position
+	history      map[string][]models.Trade
+	activeOrders map[string][]models.Order
+	quotes       map[string]map[string]*models.Quote
+	selectedIdx  int
+	dataMutex    DataMutex
+	stopChan     chan struct{}
+
+	// ctx is cancelled when the application stops. Background passes that can
+	// run for a while — the history walk above all — take it, so a shutdown
+	// ends them instead of leaving them working against a closed screen.
+	ctx           context.Context
+	ctxCancel     context.CancelFunc
 	stopOnce      sync.Once
 	portfolioView *PortfolioView
 
@@ -123,6 +155,9 @@ type App struct {
 	indexStreamProven   bool
 	indexStreamDisabled bool
 
+	// Analytics tab
+	analytics *analyticsState
+
 	// Profile overlay
 	profilePanel     *ProfilePanel
 	profileSymbol    string
@@ -158,7 +193,9 @@ func NewApp(client APIClient, accounts []models.AccountInfo) *App {
 		selectedIdx:  0,
 		stopChan:     make(chan struct{}),
 		pages:        tview.NewPages(),
+		analytics:    newAnalyticsState(),
 	}
+	a.ctx, a.ctxCancel = context.WithCancel(context.Background())
 	a.portfolioView = NewPortfolioView(a.app)
 	a.header = createHeader()
 	a.statusBar = createStatusBar()
@@ -772,6 +809,9 @@ func (a *App) Run() error {
 func (a *App) Stop() {
 	a.stopOnce.Do(func() {
 		close(a.stopChan)
+		if a.ctxCancel != nil {
+			a.ctxCancel()
+		}
 		a.app.Stop()
 	})
 }
@@ -955,8 +995,14 @@ func (a *App) CloseProfile() {
 	a.app.SetFocus(a.activeTabTable())
 }
 
-// activeTabTable returns the table of the tab currently on screen.
-func (a *App) activeTabTable() *tview.Table {
+// activeTabTable returns the primitive that should hold focus for the tab
+// currently on screen. It is what a closing profile or modal hands focus back
+// to, so leaving one lands on the tab it was opened from.
+//
+// It returns a Primitive rather than a Table because the Analytics tab is not
+// a table: which primitive is focusable there depends on its sub-screen, and
+// the tab answers that question itself.
+func (a *App) activeTabTable() tview.Primitive {
 	tv := a.portfolioView.TabbedView
 	switch tv.ActiveTab {
 	case TabHistory:
@@ -965,6 +1011,8 @@ func (a *App) activeTabTable() *tview.Table {
 		return tv.OrdersTable
 	case TabIndex:
 		return tv.IndexTable
+	case TabAnalytics:
+		return tv.Analytics.Focusable()
 	default:
 		return tv.PositionsTable
 	}

@@ -84,12 +84,24 @@ func (a *App) applyAccountData(accountID string, pos []models.Position, quotes m
 		// map holds the quotes the stream delivered.
 		a.quotes[accountID] = make(map[string]*models.Quote)
 	}
-	// Update account info (Equity, UnrealizedPnL) with fresh data from API
+	// Refresh the account's own numbers from the API. The margin block and the
+	// cash line of the Analytics overview read them straight off this struct,
+	// so carrying only equity here would leave that screen showing the values
+	// from the first load forever.
 	if accInfo != nil {
 		for i := range a.accounts {
 			if a.accounts[i].ID == accountID {
 				a.accounts[i].Equity = accInfo.Equity
 				a.accounts[i].UnrealizedPnL = accInfo.UnrealizedPnL
+				a.accounts[i].PortfolioKind = accInfo.PortfolioKind
+				a.accounts[i].HasMarginData = accInfo.HasMarginData
+				a.accounts[i].Cash = accInfo.Cash
+				a.accounts[i].AvailableCash = accInfo.AvailableCash
+				a.accounts[i].InitialMargin = accInfo.InitialMargin
+				a.accounts[i].MaintenanceMargin = accInfo.MaintenanceMargin
+				a.accounts[i].MoneyReserved = accInfo.MoneyReserved
+				a.accounts[i].FirstTradeDate = accInfo.FirstTradeDate
+				a.accounts[i].FirstNonTradeDate = accInfo.FirstNonTradeDate
 				break
 			}
 		}
@@ -102,6 +114,14 @@ func (a *App) applyAccountData(accountID string, pos []models.Position, quotes m
 		updatePositionsTable(a)
 		updateInfoPanel(a)
 		updateStatusBar(a)
+
+		// The overview is computed from exactly the data that just changed, and
+		// only while it is on screen. The tick is also its schedule for rates
+		// and face currencies: ensureCurrencyData asks only for what is due.
+		if a.onAnalyticsTab() {
+			a.ensureCurrencyData()
+			updateAnalyticsOverview(a)
+		}
 
 		// Positions changed, so the stream subscription may need to too.
 		a.recomputeStreamSymbols()
@@ -166,117 +186,10 @@ func (a *App) loadOrdersAsync(accountID string) {
 	}()
 }
 
-// loadProfileAsync loads all profile data in parallel goroutines.
+// loadProfileAsync loads all profile data off the event loop and shows it.
 func (a *App) loadProfileAsync(accountID, symbol string, timeframeIdx int) {
 	go func() {
-		profile := &models.InstrumentProfile{Symbol: symbol}
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-
-		// 1. GetAssetInfo first — the instrument type it reveals gates which
-		// corporate-action calendars (if any) are fetched below.
-		details, err := a.client.GetAssetInfo(accountID, symbol)
-		if err != nil {
-			log.Printf("[WARN] GetAssetInfo failed for %s: %v", symbol, err)
-		} else {
-			profile.Details = details
-		}
-
-		// 2. GetAssetParams
-		wg.Go(func() {
-			params, err := a.client.GetAssetParams(accountID, symbol)
-			if err != nil {
-				log.Printf("[WARN] GetAssetParams failed for %s: %v", symbol, err)
-				return
-			}
-			mu.Lock()
-			profile.Params = params
-			mu.Unlock()
-		})
-
-		// 3. GetQuotes
-		wg.Go(func() {
-			quotes, err := a.client.GetQuotes(accountID, []string{symbol})
-			if err != nil {
-				log.Printf("[WARN] GetQuotes failed for %s: %v", symbol, err)
-				return
-			}
-			mu.Lock()
-			for _, q := range quotes {
-				profile.Quote = q
-				break
-			}
-			mu.Unlock()
-		})
-
-		// 4. GetSchedule
-		wg.Go(func() {
-			sessions, err := a.client.GetSchedule(symbol)
-			if err != nil {
-				log.Printf("[WARN] GetSchedule failed for %s: %v", symbol, err)
-				return
-			}
-			mu.Lock()
-			profile.Schedule = sessions
-			mu.Unlock()
-		})
-
-		// 5. GetBars
-		wg.Go(func() {
-			now := time.Now()
-			tf := profileTimeframeEnums[timeframeIdx]
-			from := now.Add(-profileTimeframeDurations[timeframeIdx])
-			bars, err := a.client.GetBars(accountID, symbol, tf, from, now)
-			if err != nil {
-				log.Printf("[WARN] GetBars failed for %s: %v", symbol, err)
-				return
-			}
-			mu.Lock()
-			profile.Bars = bars
-			mu.Unlock()
-		})
-
-		// 6. Type-gated corporate-action calendars. For an equity, fetch the
-		// dividend and split calendars in parallel; each is non-fatal — a failed
-		// request just leaves its section empty. Non-equities (futures/options/
-		// bonds) skip these entirely (bonds get their own events in Phase 4).
-		if isEquityDetails(details) {
-			wg.Go(func() {
-				dividends, err := a.client.GetDividends(symbol)
-				if err != nil {
-					log.Printf("[WARN] GetDividends failed for %s: %v", symbol, err)
-					return
-				}
-				mu.Lock()
-				profile.Dividends = dividends
-				mu.Unlock()
-			})
-
-			wg.Go(func() {
-				splits, err := a.client.GetSplits(symbol)
-				if err != nil {
-					log.Printf("[WARN] GetSplits failed for %s: %v", symbol, err)
-					return
-				}
-				mu.Lock()
-				profile.Splits = splits
-				mu.Unlock()
-			})
-		} else if isBondDetails(details) {
-			// For a bond, fetch the coupon/amortization/offer calendar; non-fatal.
-			wg.Go(func() {
-				events, err := a.client.GetBondEvents(symbol)
-				if err != nil {
-					log.Printf("[WARN] GetBondEvents failed for %s: %v", symbol, err)
-					return
-				}
-				mu.Lock()
-				profile.BondEvents = events
-				mu.Unlock()
-			})
-		}
-
-		wg.Wait()
+		profile := a.loadProfileSync(accountID, symbol, timeframeIdx)
 
 		a.app.QueueUpdateDraw(func() {
 			if a.profileOpen && a.profileSymbol == symbol {
@@ -285,6 +198,130 @@ func (a *App) loadProfileAsync(accountID, symbol string, timeframeIdx int) {
 			}
 		})
 	}()
+}
+
+// loadProfileSync gathers everything the profile shows, fanning the requests
+// out in parallel. It blocks, so it belongs off the event loop; it is separate
+// from loadProfileAsync so tests can drive it without a running application.
+func (a *App) loadProfileSync(accountID, symbol string, timeframeIdx int) *models.InstrumentProfile {
+	profile := &models.InstrumentProfile{Symbol: symbol}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// 1. GetAssetInfo first — the instrument type it reveals gates which
+	// corporate-action calendars (if any) are fetched below.
+	details, err := a.client.GetAssetInfo(accountID, symbol)
+	if err != nil {
+		log.Printf("[WARN] GetAssetInfo failed for %s: %v", symbol, err)
+	} else {
+		profile.Details = details
+	}
+
+	// 2. GetAssetParams
+	wg.Go(func() {
+		params, err := a.client.GetAssetParams(accountID, symbol)
+		if err != nil {
+			log.Printf("[WARN] GetAssetParams failed for %s: %v", symbol, err)
+			return
+		}
+		mu.Lock()
+		profile.Params = params
+		mu.Unlock()
+	})
+
+	// 3. GetQuotes
+	wg.Go(func() {
+		quotes, err := a.client.GetQuotes(accountID, []string{symbol})
+		if err != nil {
+			log.Printf("[WARN] GetQuotes failed for %s: %v", symbol, err)
+			return
+		}
+		mu.Lock()
+		for _, q := range quotes {
+			profile.Quote = q
+			break
+		}
+		mu.Unlock()
+	})
+
+	// 4. GetSchedule
+	wg.Go(func() {
+		sessions, err := a.client.GetSchedule(symbol)
+		if err != nil {
+			log.Printf("[WARN] GetSchedule failed for %s: %v", symbol, err)
+			return
+		}
+		mu.Lock()
+		profile.Schedule = sessions
+		mu.Unlock()
+	})
+
+	// 5. GetBars
+	wg.Go(func() {
+		now := time.Now()
+		tf := profileTimeframeEnums[timeframeIdx]
+		from := now.Add(-profileTimeframeDurations[timeframeIdx])
+		bars, err := a.client.GetBars(accountID, symbol, tf, from, now)
+		if err != nil {
+			log.Printf("[WARN] GetBars failed for %s: %v", symbol, err)
+			return
+		}
+		mu.Lock()
+		profile.Bars = bars
+		mu.Unlock()
+	})
+
+	// 6. Type-gated corporate-action calendars. For an equity, fetch the
+	// dividend and split calendars in parallel; each is non-fatal — a failed
+	// request just leaves its section empty. Non-equities (futures/options/
+	// bonds) skip these entirely (bonds get their own events in Phase 4).
+	if isEquityDetails(details) {
+		wg.Go(func() {
+			dividends, err := a.client.GetDividends(symbol)
+			if err != nil {
+				log.Printf("[WARN] GetDividends failed for %s: %v", symbol, err)
+				return
+			}
+			mu.Lock()
+			profile.Dividends = dividends
+			mu.Unlock()
+		})
+
+		wg.Go(func() {
+			splits, err := a.client.GetSplits(symbol)
+			if err != nil {
+				log.Printf("[WARN] GetSplits failed for %s: %v", symbol, err)
+				return
+			}
+			mu.Lock()
+			profile.Splits = splits
+			mu.Unlock()
+		})
+	} else if isBondDetails(details) {
+		// For a bond, fetch the coupon/amortization/offer calendar; non-fatal.
+		wg.Go(func() {
+			events, err := a.client.GetBondEvents(symbol)
+			if err != nil {
+				log.Printf("[WARN] GetBondEvents failed for %s: %v", symbol, err)
+				return
+			}
+			mu.Lock()
+			profile.BondEvents = events
+			mu.Unlock()
+		})
+	}
+
+	wg.Wait()
+
+	// The face currency comes from the calendar just loaded: the API names it
+	// nowhere else. A cache read, so it costs no request — and it also finds
+	// the answer when this calendar failed but the overview already looked the
+	// bond up this session.
+	if isBondDetails(details) {
+		profile.BondFaceCurrency, _ = a.client.BondFaceCurrencyCached(symbol)
+	}
+
+	return profile
 }
 
 // loadProfileBarsAsync reloads only bars for a timeframe switch.

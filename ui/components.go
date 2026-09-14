@@ -29,12 +29,13 @@ const (
 	TabHistory
 	TabOrders
 	TabIndex
+	TabAnalytics
 )
 
 // tabLabels is the single source of truth for the tab order: the header renders
 // it and the ←/→ cycle wraps on its length, so adding a tab is a one-line
 // change here rather than a hunt for hardcoded counts.
-var tabLabels = []string{" Positions ", " History ", " Orders ", " Index "}
+var tabLabels = []string{" Positions ", " History ", " Orders ", " Index ", " Analytics "}
 
 // TabCount is the number of tabs the ←/→ cycle walks.
 func TabCount() int { return len(tabLabels) }
@@ -49,6 +50,7 @@ type TabbedView struct {
 	HistoryTable   *tview.Table
 	OrdersTable    *tview.Table
 	IndexTable     *tview.Table
+	Analytics      *AnalyticsView
 	Content        *tview.Pages // To switch between tables
 	Header         *tview.TextView
 }
@@ -83,6 +85,7 @@ func NewTabbedView() *TabbedView {
 		HistoryTable:   createHistoryTable(),
 		OrdersTable:    createOrdersTable(),
 		IndexTable:     createIndexTable(),
+		Analytics:      NewAnalyticsView(),
 		Content:        tview.NewPages(),
 		Header:         tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter),
 	}
@@ -93,6 +96,7 @@ func NewTabbedView() *TabbedView {
 	tv.Content.AddPage("history", tv.HistoryTable, true, false)
 	tv.Content.AddPage("orders", tv.OrdersTable, true, false)
 	tv.Content.AddPage("index", tv.IndexTable, true, false)
+	tv.Content.AddPage("analytics", tv.Analytics, true, false)
 
 	tv.AddItem(tv.Header, 1, 0, false)
 	tv.AddItem(tv.Content, 0, 1, true)
@@ -129,6 +133,8 @@ func (tv *TabbedView) SetTab(tab TabType) {
 		tv.Content.SwitchToPage("orders")
 	case TabIndex:
 		tv.Content.SwitchToPage("index")
+	case TabAnalytics:
+		tv.Content.SwitchToPage("analytics")
 	}
 	tv.UpdateHeader()
 }
@@ -323,11 +329,17 @@ func createInfoLabel() *tview.TextView {
 	return label
 }
 
+// statusBarColour is the background of the status line at the bottom of the
+// screen. The Analytics history progress bar paints its empty part in it, so
+// the two strips read as the same material; one constant keeps them from
+// drifting apart.
+const statusBarColour = tcell.ColorDarkSlateGray
+
 // createStatusBar creates the status bar
 func createStatusBar() *tview.TextView {
 	bar := tview.NewTextView()
 	bar.SetTextAlign(tview.AlignLeft)
-	bar.SetBackgroundColor(tcell.ColorDarkSlateGray)
+	bar.SetBackgroundColor(statusBarColour)
 	bar.SetTextColor(tcell.ColorWhite)
 	return bar
 }

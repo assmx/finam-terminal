@@ -13,6 +13,7 @@ import (
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/assets"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/auth"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/metrics"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/orders"
 	"google.golang.org/genproto/googleapis/type/decimal"
 	"google.golang.org/genproto/googleapis/type/interval"
@@ -41,6 +42,16 @@ func (m *mockMarketDataServiceClient) LastQuote(ctx context.Context, in *marketd
 
 func (m *mockMarketDataServiceClient) Bars(ctx context.Context, in *marketdata.BarsRequest, opts ...grpc.CallOption) (*marketdata.BarsResponse, error) {
 	return m.BarsFunc(ctx, in, opts...)
+}
+
+// mockUsageMetricsServiceClient is a manual mock for metrics.UsageMetricsServiceClient
+type mockUsageMetricsServiceClient struct {
+	metrics.UsageMetricsServiceClient
+	GetUsageMetricsFunc func(ctx context.Context, in *metrics.GetUsageMetricsRequest, opts ...grpc.CallOption) (*metrics.GetUsageMetricsResponse, error)
+}
+
+func (m *mockUsageMetricsServiceClient) GetUsageMetrics(ctx context.Context, in *metrics.GetUsageMetricsRequest, opts ...grpc.CallOption) (*metrics.GetUsageMetricsResponse, error) {
+	return m.GetUsageMetricsFunc(ctx, in, opts...)
 }
 
 // mockAssetsServiceClient is a manual mock for assets.AssetsServiceClient
@@ -77,8 +88,9 @@ func (m *mockAssetsServiceClient) Schedule(ctx context.Context, in *assets.Sched
 // mockAccountsServiceClient is a manual mock for accounts.AccountsServiceClient
 type mockAccountsServiceClient struct {
 	accounts.AccountsServiceClient
-	GetAccountFunc func(ctx context.Context, in *accounts.GetAccountRequest, opts ...grpc.CallOption) (*accounts.GetAccountResponse, error)
-	TradesFunc     func(ctx context.Context, in *accounts.TradesRequest, opts ...grpc.CallOption) (*accounts.TradesResponse, error)
+	GetAccountFunc   func(ctx context.Context, in *accounts.GetAccountRequest, opts ...grpc.CallOption) (*accounts.GetAccountResponse, error)
+	TradesFunc       func(ctx context.Context, in *accounts.TradesRequest, opts ...grpc.CallOption) (*accounts.TradesResponse, error)
+	TransactionsFunc func(ctx context.Context, in *accounts.TransactionsRequest, opts ...grpc.CallOption) (*accounts.TransactionsResponse, error)
 }
 
 func (m *mockAccountsServiceClient) GetAccount(ctx context.Context, in *accounts.GetAccountRequest, opts ...grpc.CallOption) (*accounts.GetAccountResponse, error) {
@@ -87,6 +99,10 @@ func (m *mockAccountsServiceClient) GetAccount(ctx context.Context, in *accounts
 
 func (m *mockAccountsServiceClient) Trades(ctx context.Context, in *accounts.TradesRequest, opts ...grpc.CallOption) (*accounts.TradesResponse, error) {
 	return m.TradesFunc(ctx, in, opts...)
+}
+
+func (m *mockAccountsServiceClient) Transactions(ctx context.Context, in *accounts.TransactionsRequest, opts ...grpc.CallOption) (*accounts.TransactionsResponse, error) {
+	return m.TransactionsFunc(ctx, in, opts...)
 }
 
 // mockAuthServiceClient is a manual mock for auth.AuthServiceClient

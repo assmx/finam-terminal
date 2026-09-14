@@ -77,6 +77,14 @@ func TestNormalizeSymbols(t *testing.T) {
 			input: nil,
 			want:  []string{},
 		},
+		{
+			// One blocked symbol silences the whole subscription it joins
+			// (2026-09-11: SBER alone 56 quotes in 12 s, SBER with
+			// FXRL.MMBZ@_MMBZ none), whoever asked for it.
+			name:  "drops symbols on a blocked venue",
+			input: []string{"SBER@TQBR", "AAPL.SPBZ@_SPBZ", "GAZP@TQBR", "FXRL.MMBZ@_MMBZ"},
+			want:  []string{"SBER@TQBR", "GAZP@TQBR"},
+		},
 	}
 
 	for _, tt := range tests {

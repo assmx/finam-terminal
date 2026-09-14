@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"finam-terminal/api"
 	"finam-terminal/models"
 
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
@@ -42,6 +45,147 @@ type mockClient struct {
 
 	GetIndexConstituentsFunc  func(indexSymbol string) ([]models.IndexConstituent, error)
 	GetIndexConstituentsCalls atomic.Int64
+
+	// Analytics. GetInstrumentTypeCalls exists for the budget assertions the
+	// track rests on: it proves the type lookup stays a memory read rather
+	// than becoming a request.
+	GetInstrumentTypeFunc  func(symbol string) string
+	GetInstrumentTypeCalls atomic.Int64
+
+	// GetQuotesCalls backs the same budget assertions: a redraw of the
+	// Analytics overview must not reach for quotes either.
+	GetQuotesCalls atomic.Int64
+
+	// History. LoadHistoryCalls is the counter the laziness assertions rest
+	// on: one pass per account per session, none on a tick, none on a repeat
+	// visit. LoadHistoryDelay lets a test observe the in-flight state, and
+	// LoadHistoryProgress is replayed to the caller so the progress bar can
+	// be exercised without a real walk. LoadHistoryObserve, when set, runs
+	// before each replayed report and once after the last, so a test can read
+	// what the screen would show at every step of the pass.
+	LoadHistoryFunc     func(ctx context.Context, req api.HistoryRequest) (*api.HistoryBundle, error)
+	LoadHistoryCalls    atomic.Int64
+	LoadHistoryDelay    time.Duration
+	LoadHistoryProgress []api.HistoryProgress
+	LoadHistoryObserve  func()
+
+	// Bars and calendars are counted for the same reason: the benchmark asks
+	// for two narrow windows and the payout screen two calendars per position,
+	// and both promise not to ask again on a repeat visit.
+	GetBarsCalls       atomic.Int64
+	GetDividendsCalls  atomic.Int64
+	GetSplitsCalls     atomic.Int64
+	GetBondEventsCalls atomic.Int64
+
+	// Currency. The three reads are free in the real client; the two lookups
+	// are not, and their counters carry the currency budget: one rate per
+	// currency per TTL, none for a rouble account, no calendar for an
+	// ordinary bond, and nothing at all on a redraw.
+	GetInstrumentCurrencyFunc  func(symbol string) (models.InstrumentCurrency, bool)
+	GetUnitValueFunc           func(symbol string) (models.UnitValue, bool)
+	BondFaceCurrencyCachedFunc func(symbol string) (string, bool)
+	GetBondFaceCurrencyFunc    func(symbol string) (string, error)
+	GetFXRatesFunc             func(currencies []string) (map[string]models.FXRate, error)
+	GetBondFaceCurrencyCalls   atomic.Int64
+	GetFXRatesCalls            atomic.Int64
+
+	currencyMu     sync.Mutex
+	fxRatesAsked   map[string]int
+	faceLookupsFor map[string]int
+}
+
+// FXRatesAskedFor reports how many GetFXRates calls included currency.
+func (m *mockClient) FXRatesAskedFor(currency string) int {
+	m.currencyMu.Lock()
+	defer m.currencyMu.Unlock()
+	return m.fxRatesAsked[currency]
+}
+
+// FaceLookupsFor reports how many GetBondFaceCurrency calls asked for symbol.
+func (m *mockClient) FaceLookupsFor(symbol string) int {
+	m.currencyMu.Lock()
+	defer m.currencyMu.Unlock()
+	return m.faceLookupsFor[symbol]
+}
+
+func (m *mockClient) GetInstrumentCurrency(symbol string) (models.InstrumentCurrency, bool) {
+	if m.GetInstrumentCurrencyFunc != nil {
+		return m.GetInstrumentCurrencyFunc(symbol)
+	}
+	return models.InstrumentCurrency{}, false
+}
+
+func (m *mockClient) GetUnitValue(symbol string) (models.UnitValue, bool) {
+	if m.GetUnitValueFunc != nil {
+		return m.GetUnitValueFunc(symbol)
+	}
+	return models.UnitValue{}, false
+}
+
+func (m *mockClient) BondFaceCurrencyCached(symbol string) (string, bool) {
+	if m.BondFaceCurrencyCachedFunc != nil {
+		return m.BondFaceCurrencyCachedFunc(symbol)
+	}
+	return "", false
+}
+
+func (m *mockClient) GetBondFaceCurrency(symbol string) (string, error) {
+	m.GetBondFaceCurrencyCalls.Add(1)
+	m.currencyMu.Lock()
+	if m.faceLookupsFor == nil {
+		m.faceLookupsFor = make(map[string]int)
+	}
+	m.faceLookupsFor[symbol]++
+	m.currencyMu.Unlock()
+
+	if m.GetBondFaceCurrencyFunc != nil {
+		return m.GetBondFaceCurrencyFunc(symbol)
+	}
+	return "", nil
+}
+
+func (m *mockClient) GetFXRates(currencies []string) (map[string]models.FXRate, error) {
+	m.GetFXRatesCalls.Add(1)
+	m.currencyMu.Lock()
+	if m.fxRatesAsked == nil {
+		m.fxRatesAsked = make(map[string]int)
+	}
+	for _, c := range currencies {
+		m.fxRatesAsked[c]++
+	}
+	m.currencyMu.Unlock()
+
+	if m.GetFXRatesFunc != nil {
+		return m.GetFXRatesFunc(currencies)
+	}
+	return map[string]models.FXRate{}, nil
+}
+
+func (m *mockClient) LoadHistory(ctx context.Context, req api.HistoryRequest, progress func(api.HistoryProgress)) (*api.HistoryBundle, error) {
+	m.LoadHistoryCalls.Add(1)
+
+	if m.LoadHistoryDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(m.LoadHistoryDelay):
+		}
+	}
+	if progress != nil {
+		for _, p := range m.LoadHistoryProgress {
+			if m.LoadHistoryObserve != nil {
+				m.LoadHistoryObserve()
+			}
+			progress(p)
+		}
+	}
+	if m.LoadHistoryObserve != nil {
+		m.LoadHistoryObserve()
+	}
+	if m.LoadHistoryFunc != nil {
+		return m.LoadHistoryFunc(ctx, req)
+	}
+	return &api.HistoryBundle{Boundary: req.To, Complete: true}, nil
 }
 
 func (m *mockClient) GetAccounts() ([]models.AccountInfo, error) {
@@ -59,6 +203,7 @@ func (m *mockClient) GetAccountDetails(accountID string) (*models.AccountInfo, [
 }
 
 func (m *mockClient) GetQuotes(accountID string, symbols []string) (map[string]*models.Quote, error) {
+	m.GetQuotesCalls.Add(1)
 	if m.GetQuotesFunc != nil {
 		return m.GetQuotesFunc(accountID, symbols)
 	}
@@ -155,6 +300,7 @@ func (m *mockClient) GetActiveOrders(accountID string) ([]models.Order, error) {
 }
 
 func (m *mockClient) GetBars(accountID string, symbol string, timeframe marketdata.TimeFrame, from, to time.Time) ([]models.Bar, error) {
+	m.GetBarsCalls.Add(1)
 	if m.GetBarsFunc != nil {
 		return m.GetBarsFunc(accountID, symbol, timeframe, from, to)
 	}
@@ -183,6 +329,7 @@ func (m *mockClient) GetSchedule(symbol string) ([]models.TradingSession, error)
 }
 
 func (m *mockClient) GetDividends(symbol string) ([]models.Dividend, error) {
+	m.GetDividendsCalls.Add(1)
 	if m.GetDividendsFunc != nil {
 		return m.GetDividendsFunc(symbol)
 	}
@@ -190,6 +337,7 @@ func (m *mockClient) GetDividends(symbol string) ([]models.Dividend, error) {
 }
 
 func (m *mockClient) GetSplits(symbol string) ([]models.Split, error) {
+	m.GetSplitsCalls.Add(1)
 	if m.GetSplitsFunc != nil {
 		return m.GetSplitsFunc(symbol)
 	}
@@ -197,6 +345,7 @@ func (m *mockClient) GetSplits(symbol string) ([]models.Split, error) {
 }
 
 func (m *mockClient) GetBondEvents(symbol string) ([]models.BondEvent, error) {
+	m.GetBondEventsCalls.Add(1)
 	if m.GetBondEventsFunc != nil {
 		return m.GetBondEventsFunc(symbol)
 	}
@@ -211,9 +360,21 @@ func (m *mockClient) GetIndexConstituents(indexSymbol string) ([]models.IndexCon
 	return nil, nil
 }
 
+func (m *mockClient) GetInstrumentType(symbol string) string {
+	m.GetInstrumentTypeCalls.Add(1)
+	if m.GetInstrumentTypeFunc != nil {
+		return m.GetInstrumentTypeFunc(symbol)
+	}
+	return ""
+}
+
 func (m *mockClient) CancelOrder(accountID, orderID string) error {
 	if m.CancelOrderFunc != nil {
 		return m.CancelOrderFunc(accountID, orderID)
 	}
 	return nil
 }
+
+// mockClient must satisfy the interface the App is given; a compile-time check
+// beats discovering a missing method inside a goroutine at run time.
+var _ APIClient = (*mockClient)(nil)

@@ -18,8 +18,8 @@ func TestMapOrderTypeToModal(t *testing.T) {
 		{"Stop", models.OrderTypeStop},
 		{"Take-Profit", models.OrderTypeTakeProfit},
 		{"SL/TP", models.OrderTypeSLTP},
-		{"Unknown", ""},        // unsupported type
-		{"Stop-Limit", ""},     // unsupported type
+		{"Unknown", ""},    // unsupported type
+		{"Stop-Limit", ""}, // unsupported type
 	}
 
 	for _, tt := range tests {

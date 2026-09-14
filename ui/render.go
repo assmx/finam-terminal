@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"finam-terminal/analytics"
 	"finam-terminal/models"
 
 	"github.com/gdamore/tcell/v2"
@@ -112,23 +113,43 @@ func updatePositionsTable(app *App) {
 	}
 
 	app.dataMutex.RLock()
-	accountID := app.accounts[app.selectedIdx].ID
+	account := app.accounts[app.selectedIdx]
+	accountID := account.ID
 	pos := app.positions[accountID]
 	q := app.quotes[accountID]
+	rates := app.fxRatesLocked()
 	app.dataMutex.RUnlock()
+
+	// A money cell in any other currency than the account's says which: a
+	// column never adds up dollars and roubles silently.
+	base := analyticsBaseCurrency(account)
+	instruments := instrumentMoney(app, pos)
 
 	for row, p := range pos {
 		quote := q[p.Symbol]
 		rowNum := row + 1
+		inst := instruments[p.Symbol]
 
-		qty, _ := parseFloat(p.Quantity)
 		displayQty := displayLots(p.Quantity, p.LotSize)
 
+		// The same valuation the Analytics overview uses, so the two screens
+		// cannot disagree about what a holding is worth. It also falls back to
+		// the broker's own price, which fills this column in for a position
+		// whose quote has not arrived yet instead of leaving it "N/A".
 		totalValue := "N/A"
-		if quote != nil && quote.Last != "N/A" {
-			lastPrice, _ := parseFloat(quote.Last)
-			totalValue = fmt.Sprintf("%.2f", qty*lastPrice)
+		valueColor := tcell.ColorLightGreen
+		if p.Blocked {
+			// The broker values a blocked position at zero and leaves it out of
+			// the account's equity; an amount here would be one nobody can get.
+			totalValue = "BLOCKED"
+			valueColor = tcell.ColorYellow
+		} else if money := positionValue(p, quote, inst, base); money.Valid {
+			totalValue = withCurrency(fmt.Sprintf("%.2f", money.Value), money.Currency, base)
 		}
+
+		// The broker's result figures, in the currency the overview converts
+		// them from.
+		pnlCurrency := analytics.PnLCurrency(p, inst, base, rates)
 
 		dailyPnL := p.DailyPnL
 		dailyColor := tcell.ColorWhite
@@ -140,6 +161,7 @@ func updatePositionsTable(app *App) {
 				} else if val < 0 {
 					dailyColor = tcell.ColorRed
 				}
+				dailyPnL = withCurrency(dailyPnL, pnlCurrency, base)
 			}
 		}
 
@@ -153,6 +175,7 @@ func updatePositionsTable(app *App) {
 				} else if val < 0 {
 					unrealColor = tcell.ColorRed
 				}
+				unrealizedPnL = withCurrency(unrealizedPnL, pnlCurrency, base)
 			}
 		}
 
@@ -180,7 +203,7 @@ func updatePositionsTable(app *App) {
 		app.portfolioView.TabbedView.PositionsTable.SetCell(rowNum, 4, tview.NewTableCell(dailyPnL).
 			SetStyle(tcell.StyleDefault.Background(rowBg).Foreground(dailyColor)).SetAlign(tview.AlignRight))
 		app.portfolioView.TabbedView.PositionsTable.SetCell(rowNum, 5, tview.NewTableCell(totalValue).
-			SetStyle(tcell.StyleDefault.Background(rowBg).Foreground(tcell.ColorLightGreen)).SetAlign(tview.AlignRight))
+			SetStyle(tcell.StyleDefault.Background(rowBg).Foreground(valueColor)).SetAlign(tview.AlignRight))
 		app.portfolioView.TabbedView.PositionsTable.SetCell(rowNum, 6, tview.NewTableCell(unrealizedPnL).
 			SetStyle(tcell.StyleDefault.Background(rowBg).Foreground(unrealColor)).SetAlign(tview.AlignRight))
 	}
@@ -615,6 +638,9 @@ func updateStatusBar(app *App) {
 		if app.portfolioView.TabbedView.ActiveTab == TabOrders &&
 			app.app.GetFocus() == app.portfolioView.TabbedView.OrdersTable {
 			shortcuts += " | [yellow]X[white] Cancel [yellow]E[white] Modify [yellow]R[white] Refresh"
+		}
+		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
+			shortcuts += " | [yellow]1-4[white] Экран [yellow]P[white] Период [yellow]R[white] Обновить [yellow]Enter[white] Профиль"
 		}
 		// Check if TabbedView.IndexTable is active and focused
 		if app.portfolioView.TabbedView.ActiveTab == TabIndex &&

@@ -22,6 +22,12 @@ func setupInputHandlers(app *App) {
 			app.pollIndexQuotesAsync(true)
 			return
 		}
+		// Analytics refreshes before the account guard too: each sub-screen
+		// refreshes only its own data, and the overview redraws from memory.
+		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
+			app.RefreshAnalytics()
+			return
+		}
 		if app.selectedIdx < len(app.accounts) {
 			accountID := app.accounts[app.selectedIdx].ID
 			switch app.portfolioView.TabbedView.ActiveTab {
@@ -81,6 +87,12 @@ func setupInputHandlers(app *App) {
 			app.app.SetFocus(app.portfolioView.TabbedView.OrdersTable)
 		case TabIndex:
 			app.app.SetFocus(app.portfolioView.TabbedView.IndexTable)
+		case TabAnalytics:
+			app.app.SetFocus(app.portfolioView.TabbedView.Analytics.Focusable())
+		}
+
+		if tab == TabAnalytics {
+			app.EnterAnalyticsTab()
 		}
 
 		// Same reason as in refresh: the Index tab has no account to wait for.
@@ -164,6 +176,18 @@ func setupInputHandlers(app *App) {
 					}
 					return nil
 				}
+				if table == app.portfolioView.TabbedView.Analytics.TradesTable {
+					if symbol := app.selectedTradeSymbol(); symbol != "" {
+						app.OpenProfileForSymbol(symbol)
+					}
+					return nil
+				}
+				if table == app.portfolioView.TabbedView.Analytics.PayoutTable {
+					if symbol := app.selectedPayoutSymbol(); symbol != "" {
+						app.OpenProfileForSymbol(symbol)
+					}
+					return nil
+				}
 			case tcell.KeyDelete:
 				if table == app.portfolioView.TabbedView.OrdersTable {
 					app.ShowCancelConfirmation()
@@ -185,6 +209,16 @@ func setupInputHandlers(app *App) {
 					// The composition carries full ticker@mic symbols, so the
 					// instrument goes through the existing order path unchanged.
 					if symbol := app.selectedIndexSymbol(); symbol != "" {
+						app.OpenOrderModalWithTicker(symbol)
+					}
+				}
+				if table == app.portfolioView.TabbedView.Analytics.TradesTable {
+					if symbol := app.selectedTradeSymbol(); symbol != "" {
+						app.OpenOrderModalWithTicker(symbol)
+					}
+				}
+				if table == app.portfolioView.TabbedView.Analytics.PayoutTable {
+					if symbol := app.selectedPayoutSymbol(); symbol != "" {
 						app.OpenOrderModalWithTicker(symbol)
 					}
 				}
@@ -216,6 +250,8 @@ func setupInputHandlers(app *App) {
 	setupTableNavigation(app.portfolioView.TabbedView.HistoryTable)
 	setupTableNavigation(app.portfolioView.TabbedView.OrdersTable)
 	setupTableNavigation(app.portfolioView.TabbedView.IndexTable)
+	setupTableNavigation(app.portfolioView.TabbedView.Analytics.TradesTable)
+	setupTableNavigation(app.portfolioView.TabbedView.Analytics.PayoutTable)
 
 	app.portfolioView.AccountTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
@@ -387,6 +423,22 @@ func setupInputHandlers(app *App) {
 			quit()
 			return nil
 		}
+		// Digit keys pick an Analytics sub-screen, but only while that tab is
+		// on screen — elsewhere they must reach whatever has focus.
+		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
+			if screen, ok := analyticsScreenForDigit(event.Rune()); ok {
+				app.SetAnalyticsScreen(screen)
+				return nil
+			}
+			// P steps the period. Confined to this tab for the same reason as
+			// the digits: elsewhere the key belongs to whatever has focus.
+			switch event.Rune() {
+			case 'p', 'P', 'з', 'З':
+				app.NextAnalyticsPeriod()
+				return nil
+			}
+		}
+
 		switch event.Rune() {
 		case 'q', 'Q', 'й', 'Й':
 			quit()

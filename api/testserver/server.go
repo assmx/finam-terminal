@@ -9,6 +9,7 @@ import (
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/auth"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/corporateactions"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/metrics"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/orders"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -28,6 +29,7 @@ type TestServer struct {
 	Assets           *MockAssetsServer
 	Orders           *MockOrdersServer
 	CorporateActions *MockCorporateActionsServer
+	UsageMetrics     *MockUsageMetricsServer
 }
 
 // NewTestServer creates a new TestServer with all mock services registered.
@@ -44,6 +46,7 @@ func NewTestServer() *TestServer {
 		Assets:           NewMockAssetsServer(),
 		Orders:           NewMockOrdersServer(),
 		CorporateActions: NewMockCorporateActionsServer(),
+		UsageMetrics:     NewMockUsageMetricsServer(),
 	}
 
 	auth.RegisterAuthServiceServer(srv, ts.Auth)
@@ -52,6 +55,7 @@ func NewTestServer() *TestServer {
 	assets.RegisterAssetsServiceServer(srv, ts.Assets)
 	orders.RegisterOrdersServiceServer(srv, ts.Orders)
 	corporateactions.RegisterCorporateActionsServiceServer(srv, ts.CorporateActions)
+	metrics.RegisterUsageMetricsServiceServer(srv, ts.UsageMetrics)
 
 	return ts
 }

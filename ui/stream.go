@@ -99,6 +99,11 @@ func (a *App) flushQuoteInbox() {
 		updateIndexTable(a)
 	}
 
+	// Live quotes move the portfolio's value, so the breakdown follows them.
+	if a.onAnalyticsTab() {
+		updateAnalyticsOverview(a)
+	}
+
 	if accountID == "" {
 		return
 	}
@@ -172,8 +177,9 @@ func (a *App) shouldSkipQuotePolling(accountID string) bool {
 }
 
 // coveredByStream reports whether every position with a streamable symbol is in
-// the live set. Positions without a MIC never reach the stream, so they cannot
-// hold the check back.
+// the live set. Positions without a MIC never reach the stream, and neither do
+// blocked ones (the client keeps them out: one silences a whole subscription),
+// so they cannot hold the check back.
 func coveredByStream(positions []models.Position, live []string) bool {
 	if len(positions) == 0 {
 		return true
@@ -185,7 +191,7 @@ func coveredByStream(positions []models.Position, live []string) bool {
 	}
 
 	for _, p := range positions {
-		if !strings.Contains(p.Symbol, "@") {
+		if p.Blocked || !strings.Contains(p.Symbol, "@") {
 			continue
 		}
 		if _, ok := covered[p.Symbol]; !ok {

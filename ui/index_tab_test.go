@@ -48,8 +48,9 @@ func TestTabbedView_HeaderShowsIndexTab(t *testing.T) {
 	}
 }
 
-// TestInputHandler_TabCycleIncludesIndex verifies the forward cycle visits all
-// four tabs and wraps back to Positions, with focus following the tab.
+// TestInputHandler_TabCycleIncludesIndex verifies the forward cycle reaches the
+// Index tab, with focus following. The full five-tab cycle and its wrap are
+// covered by TestInputHandler_TabCycleIncludesAnalytics.
 func TestInputHandler_TabCycleIncludesIndex(t *testing.T) {
 	app := NewApp(&mockClient{}, nil)
 	setupInputHandlers(app)
@@ -64,7 +65,6 @@ func TestInputHandler_TabCycleIncludesIndex(t *testing.T) {
 		{TabHistory, tv.HistoryTable},
 		{TabOrders, tv.OrdersTable},
 		{TabIndex, tv.IndexTable},
-		{TabPositions, tv.PositionsTable},
 	}
 
 	for i, step := range want {
@@ -79,13 +79,15 @@ func TestInputHandler_TabCycleIncludesIndex(t *testing.T) {
 }
 
 // TestInputHandler_PrevTabReachesIndexFromPositions verifies the backward cycle
-// wraps to Index rather than to Orders.
+// wraps past the end of the tab list and reaches Index, rather than stopping or
+// going forward. Since Analytics joined the list, Index is two steps back.
 func TestInputHandler_PrevTabReachesIndexFromPositions(t *testing.T) {
 	app := NewApp(&mockClient{}, nil)
 	setupInputHandlers(app)
 	app.app.SetFocus(app.portfolioView.TabbedView.PositionsTable)
 	capture := app.app.GetInputCapture()
 
+	capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
 	capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
 
 	if got := app.portfolioView.TabbedView.ActiveTab; got != TabIndex {
@@ -107,8 +109,8 @@ func TestInputHandler_IndexTableNavigatesTabs(t *testing.T) {
 	app.portfolioView.TabbedView.SetTab(TabIndex)
 	capture(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
 
-	if got := app.portfolioView.TabbedView.ActiveTab; got != TabPositions {
-		t.Errorf("ActiveTab = %v, want TabPositions after → from Index", got)
+	if got := app.portfolioView.TabbedView.ActiveTab; got != TabAnalytics {
+		t.Errorf("ActiveTab = %v, want TabAnalytics after → from Index", got)
 	}
 }
 

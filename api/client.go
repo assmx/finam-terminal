@@ -16,7 +16,9 @@ import (
 	"google.golang.org/genproto/googleapis/type/date"
 	"google.golang.org/genproto/googleapis/type/decimal"
 	"google.golang.org/genproto/googleapis/type/interval"
+	"google.golang.org/genproto/googleapis/type/money"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -29,6 +31,7 @@ import (
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/auth"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/corporateactions"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
+	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/metrics"
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/orders"
 )
 
@@ -44,6 +47,7 @@ type Client struct {
 	assetsClient           assets.AssetsServiceClient
 	ordersClient           orders.OrdersServiceClient
 	corporateActionsClient corporateactions.CorporateActionsServiceClient
+	usageMetricsClient     metrics.UsageMetricsServiceClient
 
 	token       string
 	tokenExpiry time.Time
@@ -57,9 +61,29 @@ type Client struct {
 	assetMicCache       map[string]string  // ticker -> symbol@mic
 	assetLotCache       map[string]float64 // ticker -> lot size (GetAsset.lot_size)
 	tradeLotCache       map[string]float64 // ticker -> trade lot size (GetAssetParams.trade_lot_size); 0 = checked, API has none
+	assetTypeCache      map[string]string  // ticker or symbol -> Asset.Type, from the bulk list
 	instrumentNameCache map[string]string  // ticker or symbol -> human-readable name
-	securityCache       []models.SecurityInfo
-	assetMutex          sync.RWMutex
+	// Tickers GetAsset refused for want of a MIC, with the time of the refusal.
+	// The same MIC-less request would get the same answer on every refresh, so
+	// the lot resolution does not ask about them for refusedSymbolTTL.
+	refusedSymbolCache map[string]time.Time
+	// Instruments the bulk list files on a blocked venue, keyed by the ticker a
+	// position of them carries (FXRL for FXRL.MMBZ@_MMBZ). See blocked.go.
+	blockedTwinCache map[string]blockedTwin
+	// Money facts filed from answers the terminal already receives: GetAsset
+	// (for the lot and the profile) and GetAssetParams (for the trade lot).
+	// Present means the broker answered, even if it named nothing.
+	instrumentCurrencyCache map[string]models.InstrumentCurrency // ticker or symbol -> quote currency and face value
+	unitValueCache          map[string]models.UnitValue          // ticker or symbol -> value of one piece
+	faceCurrencyCache       map[string]string                    // bond symbol -> face currency from its calendar; "" = calendar named none
+	securityCache           []models.SecurityInfo
+	assetMutex              sync.RWMutex
+
+	// Corporate-action calendars (dividends, splits, bond events), cached per
+	// symbol for calendarCacheTTL. These change on the scale of months, so the
+	// Payouts screen and the instrument profile share one day-long answer
+	// instead of spending two requests per position per refresh.
+	calendars calendarCache
 
 	// Index composition cache (GetConstituents), keyed by index symbol.
 	indexMu    sync.RWMutex
@@ -111,20 +135,24 @@ func NewClient(grpcAddr string, apiToken string) (*Client, error) {
 // and loads the asset cache. Used by NewClient and by tests via bufconn.
 func newClientFromConn(conn *grpc.ClientConn, apiToken string) (*Client, error) {
 	client := &Client{
-		conn:                   conn,
-		authClient:             auth.NewAuthServiceClient(conn),
-		accountsClient:         accounts.NewAccountsServiceClient(conn),
-		marketDataClient:       marketdata.NewMarketDataServiceClient(conn),
-		assetsClient:           assets.NewAssetsServiceClient(conn),
-		ordersClient:           orders.NewOrdersServiceClient(conn),
-		corporateActionsClient: corporateactions.NewCorporateActionsServiceClient(conn),
-		apiToken:               apiToken,
-		assetMicCache:          make(map[string]string),
-		assetLotCache:          make(map[string]float64),
-		tradeLotCache:          make(map[string]float64),
-		indexCache:             make(map[string]indexCacheEntry),
-		instrumentNameCache:    make(map[string]string),
-		securityCache:          make([]models.SecurityInfo, 0),
+		conn:                    conn,
+		authClient:              auth.NewAuthServiceClient(conn),
+		accountsClient:          accounts.NewAccountsServiceClient(conn),
+		marketDataClient:        marketdata.NewMarketDataServiceClient(conn),
+		assetsClient:            assets.NewAssetsServiceClient(conn),
+		ordersClient:            orders.NewOrdersServiceClient(conn),
+		corporateActionsClient:  corporateactions.NewCorporateActionsServiceClient(conn),
+		usageMetricsClient:      metrics.NewUsageMetricsServiceClient(conn),
+		apiToken:                apiToken,
+		assetMicCache:           make(map[string]string),
+		assetLotCache:           make(map[string]float64),
+		tradeLotCache:           make(map[string]float64),
+		assetTypeCache:          make(map[string]string),
+		instrumentCurrencyCache: make(map[string]models.InstrumentCurrency),
+		unitValueCache:          make(map[string]models.UnitValue),
+		indexCache:              make(map[string]indexCacheEntry),
+		instrumentNameCache:     make(map[string]string),
+		securityCache:           make([]models.SecurityInfo, 0),
 	}
 
 	// Authenticate
@@ -351,20 +379,46 @@ func (c *Client) loadAssetCache() error {
 			}
 		}
 
+		// The instrument type rides along on the bulk list the terminal
+		// already loads at startup, so the Analytics overview groups
+		// positions without a single extra request.
+		if asset.Type != "" {
+			if asset.Ticker != "" {
+				c.assetTypeCache[asset.Ticker] = asset.Type
+			}
+			if fullSymbol != "" {
+				c.assetTypeCache[fullSymbol] = asset.Type
+			}
+		}
+
 		c.securityCache = append(c.securityCache, models.SecurityInfo{
 			Ticker: asset.Ticker,
 			Symbol: fullSymbol,
 			Name:   asset.Name,
+			Type:   asset.Type,
 		})
+
+		// A blocked instrument's twin is what recognises a position the broker
+		// sends without a MIC — from the list already loaded, for free.
+		c.fileBlockedTwinLocked(asset.Ticker, fullSymbol, asset.Name)
 	}
 
 	log.Printf("[INFO] Loaded %d instruments into cache", len(resp.Assets))
+	if n := len(c.blockedTwinCache); n > 0 {
+		log.Printf("[INFO] %d tickers have a twin on a blocked venue", n)
+	}
 	return nil
 }
 
 // getFullSymbol converts a ticker to full symbol with MIC, making sure both lot
 // tiers (asset lot and trade lot) are cached for it.
 func (c *Client) getFullSymbol(ticker string, accountID string) string {
+	// A blocked instrument is never resolved: GetAssetParams hangs on it, and
+	// its lot is of no use for something that cannot be traded.
+	if IsBlockedSymbol(ticker) {
+		return ticker
+	}
+
 	// First check local cache
 	c.assetMutex.RLock()
 	if strings.Contains(ticker, "@") {
@@ -378,6 +432,16 @@ func (c *Client) getFullSymbol(ticker string, accountID string) string {
 		return ticker
 	}
 	fullSymbol, hasSymbol := c.assetMicCache[ticker]
+	if hasSymbol && IsBlockedSymbol(fullSymbol) {
+		c.assetMutex.RUnlock()
+		return fullSymbol
+	}
+	// A ticker known only by its blocked twin: GetAsset would refuse it for
+	// carrying no MIC, and there is nothing to resolve.
+	if _, blocked := c.blockedTwinLocked(ticker); blocked {
+		c.assetMutex.RUnlock()
+		return ticker
+	}
 	_, hasLot := c.assetLotCache[ticker]
 	if !hasLot {
 		_, hasLot = c.assetLotCache[fullSymbol]
@@ -391,7 +455,15 @@ func (c *Client) getFullSymbol(ticker string, accountID string) string {
 		c.assetMutex.RUnlock()
 		return fullSymbol
 	}
+	refused := c.symbolRefusedLocked(ticker)
 	c.assetMutex.RUnlock()
+
+	// The broker has already refused this ticker for carrying no MIC. Asking
+	// again would send the same request and get the same answer, once per
+	// refresh tick.
+	if refused {
+		return ticker
+	}
 
 	// Fallback: Fetch specific asset from API
 	log.Printf("[DEBUG] Cache miss (symbol or lot) for ticker: %s. hasSymbol=%v, hasLot=%v, hasTradeLot=%v", ticker, hasSymbol, hasLot, hasTradeLot)
@@ -420,6 +492,11 @@ func (c *Client) getFullSymbol(ticker string, accountID string) string {
 	return resolved
 }
 
+// refusedSymbolTTL is how long a ticker GetAsset refused for want of a MIC is
+// not asked about again. A variable rather than a constant so tests can expire
+// it.
+var refusedSymbolTTL = 24 * time.Hour
+
 // resolveAssetLot fetches an instrument via GetAsset and caches its MIC and
 // asset lot size. It returns the resolved full symbol, or "" when the asset
 // could not be resolved.
@@ -434,8 +511,20 @@ func (c *Client) resolveAssetLot(ticker, fetchSymbol, accountID string) string {
 	})
 	if err != nil {
 		c.logGRPCError("AssetsService", "GetAsset", err, fmt.Sprintf("Symbol: %s", fetchSymbol), fmt.Sprintf("AccountId: %s", accountID))
+		// InvalidArgument is the broker saying the request itself is wrong, and
+		// for a symbol without a MIC it is wrong by construction: the live API
+		// answers "Mic must not be empty" (FXRL, RU000A10AA02, 2026-09-10).
+		// Anything else — Unavailable, a deadline — may pass, so it is not
+		// remembered and the next miss asks again.
+		if status.Code(err) == codes.InvalidArgument && !strings.Contains(fetchSymbol, "@") {
+			c.markSymbolRefused(ticker)
+			log.Printf("[WARN] GetAsset refused %s for carrying no MIC; not asked again for %v", ticker, refusedSymbolTTL)
+		}
 		return ""
 	}
+
+	// The same answer names the instrument's currency and a bond's face value.
+	c.storeInstrumentCurrency(resp, ticker, fetchSymbol)
 
 	if resp.Ticker == "" || resp.Board == "" {
 		return ""
@@ -500,6 +589,9 @@ func (c *Client) fetchAssetLotSize(symbol string, accountID string) {
 		return
 	}
 
+	// The same answer names the instrument's currency and a bond's face value.
+	c.storeInstrumentCurrency(resp, symbol)
+
 	if resp.LotSize != nil {
 		lotSizeStr := formatDecimal(resp.LotSize)
 		lotSize, parseErr := strconv.ParseFloat(strings.ReplaceAll(lotSizeStr, ",", "."), 64)
@@ -547,6 +639,8 @@ func (c *Client) fetchTradeLotSize(symbol string, accountID string) {
 	}
 
 	c.storeTradeLotSize(symbol, float64(resp.TradeLotSize))
+	// The margin in the same answer prices one piece of the instrument.
+	c.storeUnitValue(symbol, resp)
 	log.Printf("[DEBUG] Fetched trade lot size for %s: %d", symbol, resp.TradeLotSize)
 }
 
@@ -570,6 +664,24 @@ func (c *Client) storeTradeLotSize(fullSymbol string, lotSize float64) {
 	if ticker, _, found := strings.Cut(fullSymbol, "@"); found && ticker != "" {
 		c.tradeLotCache[ticker] = lotSize
 	}
+}
+
+// markSymbolRefused files a ticker GetAsset refused for carrying no MIC.
+func (c *Client) markSymbolRefused(ticker string) {
+	c.assetMutex.Lock()
+	defer c.assetMutex.Unlock()
+
+	if c.refusedSymbolCache == nil {
+		c.refusedSymbolCache = make(map[string]time.Time)
+	}
+	c.refusedSymbolCache[ticker] = time.Now()
+}
+
+// symbolRefusedLocked reports whether GetAsset refused a ticker for carrying no
+// MIC within the last refusedSymbolTTL. The caller must hold assetMutex.
+func (c *Client) symbolRefusedLocked(ticker string) bool {
+	at, ok := c.refusedSymbolCache[ticker]
+	return ok && time.Since(at) < refusedSymbolTTL
 }
 
 // lotSizeLocked resolves the lot size for a ticker or full symbol. The trade lot
@@ -628,6 +740,68 @@ func (c *Client) GetInstrumentName(key string) string {
 	c.assetMutex.RLock()
 	defer c.assetMutex.RUnlock()
 	return c.instrumentNameCache[key]
+}
+
+// GetUsageMetrics returns the Trade API quota table for the session token: one
+// row per method with its limit, remaining calls and reset time.
+//
+// The quotas belong to the token, not to an account, so a single call answers
+// for every account. Nothing here retries or polls — the Analytics tab asks
+// once on entry and again only when the user presses R.
+func (c *Client) GetUsageMetrics() ([]models.QuotaUsage, error) {
+	ctx, cancel := c.getContext()
+	defer cancel()
+
+	resp, err := c.usageMetricsClient.GetUsageMetrics(ctx, &metrics.GetUsageMetricsRequest{})
+	if err != nil {
+		c.logGRPCError("UsageMetricsService", "GetUsageMetrics", err)
+		return nil, fmt.Errorf("failed to get usage metrics: %w", err)
+	}
+
+	quotas := make([]models.QuotaUsage, 0, len(resp.Quotas))
+	for _, q := range resp.Quotas {
+		if q == nil {
+			continue
+		}
+		quotas = append(quotas, models.QuotaUsage{
+			Name:      q.Name,
+			Limit:     q.Limit,
+			Remaining: q.Remaining,
+			// reset_time is absent for any quota untouched in this window,
+			// which is the normal state for most of them. Zero time says
+			// "unknown"; the epoch would render as a countdown of decades.
+			ResetAt: timestampOrZero(q.ResetTime),
+		})
+	}
+
+	log.Printf("[INFO] Loaded %d API quotas", len(quotas))
+	return quotas, nil
+}
+
+// GetInstrumentType returns Asset.Type for a full symbol or a bare ticker, as
+// the bulk asset list reported it. An instrument outside the list and one whose
+// type the API left blank both answer "", which the caller groups as Прочее —
+// the distinction would not change anything on screen.
+//
+// This is a pure cache read: it never issues a request, which is what lets the
+// Analytics overview redraw on every five-second tick for free.
+func (c *Client) GetInstrumentType(symbol string) string {
+	if symbol == "" {
+		return ""
+	}
+
+	c.assetMutex.RLock()
+	defer c.assetMutex.RUnlock()
+
+	if t, ok := c.assetTypeCache[symbol]; ok {
+		return t
+	}
+	// A caller holding "SBER@MISX" when the list only keyed "SBER" (or the
+	// other way round) still gets an answer.
+	if ticker, _, found := strings.Cut(symbol, "@"); found {
+		return c.assetTypeCache[ticker]
+	}
+	return ""
 }
 
 // UpdateInstrumentCache stores a human-readable name keyed by both ticker and full symbol.
@@ -962,6 +1136,11 @@ func (c *Client) GetAccountDetails(accountID string) (*models.AccountInfo, []mod
 		account.UnrealizedPnL = formatDecimal(unrealized)
 	}
 
+	account.Cash = mapCashBalances(accountResp.Cash)
+	applyPortfolio(account, accountResp)
+	account.FirstTradeDate = timestampOrZero(accountResp.FirstTradeDate)
+	account.FirstNonTradeDate = timestampOrZero(accountResp.FirstNonTradeDate)
+
 	var positions []models.Position
 	for _, pos := range accountResp.Positions {
 		ticker := pos.Symbol
@@ -981,6 +1160,18 @@ func (c *Client) GetAccountDetails(accountID string) (*models.AccountInfo, []mod
 		if name == "" {
 			name = c.instrumentNameCache[fullSymbol]
 		}
+		// The broker values a blocked position at zero, and the bulk list says
+		// which ones are: by the venue, or — for a position sent without a MIC —
+		// by its twin there, which also names it.
+		blocked := IsBlockedSymbol(fullSymbol)
+		if !blocked {
+			if twin, ok := c.blockedTwinLocked(pos.Symbol); ok {
+				blocked = true
+				if name == "" {
+					name = twin.Name
+				}
+			}
+		}
 		c.assetMutex.RUnlock()
 
 		position := models.Position{
@@ -994,6 +1185,10 @@ func (c *Client) GetAccountDetails(accountID string) (*models.AccountInfo, []mod
 			CurrentPrice:  formatDecimal(pos.CurrentPrice),
 			DailyPnL:      formatDecimal(pos.DailyPnl),
 			UnrealizedPnL: formatDecimal(pos.UnrealizedPnl),
+
+			MaintenanceMargin: formatDecimal(pos.MaintenanceMargin),
+
+			Blocked: blocked,
 		}
 
 		// Filter out zero positions (historical or closed)
@@ -1012,7 +1207,10 @@ func (c *Client) GetQuotes(accountID string, symbols []string) (map[string]*mode
 	quotes := make(map[string]*models.Quote)
 	for _, symbol := range symbols {
 		fullSymbol := c.getFullSymbol(symbol, accountID)
-		if !strings.Contains(fullSymbol, "@") {
+		// A blocked symbol is skipped like one without a MIC, and as quietly:
+		// LastQuote on it hangs until the deadline, and there is no price to
+		// get — the broker values it at zero.
+		if !strings.Contains(fullSymbol, "@") || IsBlockedSymbol(fullSymbol) {
 			continue
 		}
 
@@ -1074,69 +1272,158 @@ func (c *Client) SearchSecurities(query string) ([]models.SecurityInfo, error) {
 	return results, nil
 }
 
-// GetTradeHistory returns trade history for an account
+// tradeHistoryWindow is the window the History tab shows. The tab is not part
+// of this feature and keeps the behaviour it always had.
+const tradeHistoryWindow = 30 * 24 * time.Hour
+
+// GetTradeHistory returns the last 30 days of trades for the History tab.
 func (c *Client) GetTradeHistory(accountID string) ([]models.Trade, error) {
+	now := time.Now()
+	return c.GetTrades(accountID, now.Add(-tradeHistoryWindow), now, 0)
+}
+
+// GetTrades returns the account's trades in [from, to]. limit is passed through
+// verbatim; 0 leaves the API default.
+//
+// The order of the response is preserved. The reconnaissance could not observe
+// it (no available token carries a trading account), so callers that need a
+// definite order sort for themselves.
+func (c *Client) GetTrades(accountID string, from, to time.Time, limit int32) ([]models.Trade, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
-	now := time.Now()
-	startTime := now.AddDate(0, 0, -30) // Last 30 days
-
 	resp, err := c.accountsClient.Trades(ctx, &accounts.TradesRequest{
 		AccountId: accountID,
+		Limit:     limit,
 		Interval: &interval.Interval{
-			StartTime: timestamppb.New(startTime),
-			EndTime:   timestamppb.New(now),
+			StartTime: timestamppb.New(from),
+			EndTime:   timestamppb.New(to),
 		},
 	})
 	if err != nil {
 		c.logGRPCError("AccountsService", "Trades", err,
 			fmt.Sprintf("AccountId: %s", accountID),
-			fmt.Sprintf("Interval: %s / %s", startTime.Format(time.RFC3339), now.Format(time.RFC3339)))
+			fmt.Sprintf("Interval: %s / %s", from.Format(time.RFC3339), to.Format(time.RFC3339)),
+			fmt.Sprintf("Limit: %d", limit))
 		return nil, fmt.Errorf("failed to get trades: %w", err)
 	}
 
-	var trades []models.Trade
-	for _, t := range resp.Trades {
-		side := "Unknown"
-		switch t.Side {
-		case tradeapiv1.Side_SIDE_BUY:
-			side = "Buy"
-		case tradeapiv1.Side_SIDE_SELL:
-			side = "Sell"
+	trades := make([]models.Trade, 0, len(resp.GetTrades()))
+	for _, t := range resp.GetTrades() {
+		if t == nil {
+			continue
 		}
-
-		priceStr := formatDecimal(t.Price)
-		qtyStr := formatDecimal(t.Size)
-
-		price, _ := strconv.ParseFloat(priceStr, 64)
-		qty, _ := strconv.ParseFloat(qtyStr, 64)
-		total := price * qty
-
-		c.assetMutex.RLock()
-		name := c.instrumentNameCache[t.Symbol]
-		c.assetMutex.RUnlock()
-
-		// Accrued interest is populated only for bonds (2.16.0); nil for other instruments.
-		accruedInterest := ""
-		if t.AccruedInterest != nil && t.AccruedInterest.Value != "" {
-			accruedInterest = t.AccruedInterest.Value
-		}
-
-		trades = append(trades, models.Trade{
-			ID:              t.TradeId,
-			Symbol:          t.Symbol,
-			Name:            name,
-			Side:            side,
-			Price:           priceStr,
-			Quantity:        qtyStr,
-			Total:           fmt.Sprintf("%.2f", total),
-			AccruedInterest: accruedInterest,
-			Currency:        t.Currency,
-			Timestamp:       t.Timestamp.AsTime().Local(),
-		})
+		trades = append(trades, c.mapTrade(t))
 	}
 	return trades, nil
+}
+
+// mapTrade converts one API trade into the model, resolving the instrument
+// name from the cache.
+func (c *Client) mapTrade(t *tradeapiv1.AccountTrade) models.Trade {
+	side := "Unknown"
+	switch t.Side {
+	case tradeapiv1.Side_SIDE_BUY:
+		side = "Buy"
+	case tradeapiv1.Side_SIDE_SELL:
+		side = "Sell"
+	}
+
+	priceStr := formatDecimal(t.Price)
+	qtyStr := formatDecimal(t.Size)
+
+	price, _ := strconv.ParseFloat(priceStr, 64)
+	qty, _ := strconv.ParseFloat(qtyStr, 64)
+	total := price * qty
+
+	c.assetMutex.RLock()
+	name := c.instrumentNameCache[t.Symbol]
+	c.assetMutex.RUnlock()
+
+	// Accrued interest is populated only for bonds (2.16.0); nil for other instruments.
+	accruedInterest := ""
+	if t.AccruedInterest != nil && t.AccruedInterest.Value != "" {
+		accruedInterest = t.AccruedInterest.Value
+	}
+
+	return models.Trade{
+		ID:              t.TradeId,
+		Symbol:          t.Symbol,
+		Name:            name,
+		Side:            side,
+		Price:           priceStr,
+		Quantity:        qtyStr,
+		Total:           fmt.Sprintf("%.2f", total),
+		AccruedInterest: accruedInterest,
+		Currency:        t.Currency,
+		Timestamp:       timestampOrZero(t.Timestamp).Local(),
+	}
+}
+
+// GetTransactions returns the account's money and securities movements in
+// [from, to]. limit is passed through verbatim; 0 leaves the API default.
+//
+// The category is taken from the transaction_category enum rather than the
+// free-text category field, so callers can switch on a closed set of names.
+func (c *Client) GetTransactions(accountID string, from, to time.Time, limit int32) ([]models.Transaction, error) {
+	ctx, cancel := c.getContext()
+	defer cancel()
+
+	resp, err := c.accountsClient.Transactions(ctx, &accounts.TransactionsRequest{
+		AccountId: accountID,
+		Limit:     limit,
+		Interval: &interval.Interval{
+			StartTime: timestamppb.New(from),
+			EndTime:   timestamppb.New(to),
+		},
+	})
+	if err != nil {
+		c.logGRPCError("AccountsService", "Transactions", err,
+			fmt.Sprintf("AccountId: %s", accountID),
+			fmt.Sprintf("Interval: %s / %s", from.Format(time.RFC3339), to.Format(time.RFC3339)),
+			fmt.Sprintf("Limit: %d", limit))
+		return nil, fmt.Errorf("failed to get transactions: %w", err)
+	}
+
+	transactions := make([]models.Transaction, 0, len(resp.GetTransactions()))
+	for _, t := range resp.GetTransactions() {
+		if t == nil {
+			continue
+		}
+		transactions = append(transactions, mapTransaction(t))
+	}
+	return transactions, nil
+}
+
+// mapTransaction converts one API transaction into the model.
+//
+// Every field is read nil-safe: the reconnaissance never observed a live
+// transaction (no token carried a trading account), so nothing here assumes
+// the broker populates anything.
+func mapTransaction(t *accounts.Transaction) models.Transaction {
+	tx := models.Transaction{
+		ID:        t.GetId(),
+		Symbol:    t.GetSymbol(),
+		Category:  t.GetTransactionCategory().String(),
+		Name:      t.GetTransactionName(),
+		Timestamp: timestampOrZero(t.GetTimestamp()),
+		ChangeQty: parseDecimalFloat(t.GetChangeQty()),
+	}
+
+	if m := t.GetChange(); m != nil {
+		tx.Amount = moneyAmount(m)
+		tx.Currency = m.GetCurrencyCode()
+	}
+
+	if tr := t.GetTrade(); tr != nil {
+		tx.Trade = &models.TransactionTrade{
+			Size:            parseDecimalFloat(tr.GetSize()),
+			Price:           parseDecimalFloat(tr.GetPrice()),
+			AccruedInterest: parseDecimalFloat(tr.GetAccruedInterest()),
+		}
+	}
+
+	return tx
 }
 
 // GetActiveOrders returns active orders for an account
@@ -1331,6 +1618,13 @@ const caCalendarLimit = 20
 // GetDividends returns the merged past (last 12 months, DESC) + future (ASC)
 // dividend calendar for a symbol, sorted ascending by date with IsFuture flags.
 func (c *Client) GetDividends(symbol string) ([]models.Dividend, error) {
+	return calendarCached(c, "dividends", symbol, func() ([]models.Dividend, error) {
+		return c.fetchDividends(symbol)
+	})
+}
+
+// fetchDividends performs the two uncached calls behind GetDividends.
+func (c *Client) fetchDividends(symbol string) ([]models.Dividend, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
@@ -1373,6 +1667,13 @@ func (c *Client) GetDividends(symbol string) ([]models.Dividend, error) {
 // GetSplits returns the merged past+future split calendar for a symbol, sorted
 // ascending by date with IsFuture flags.
 func (c *Client) GetSplits(symbol string) ([]models.Split, error) {
+	return calendarCached(c, "splits", symbol, func() ([]models.Split, error) {
+		return c.fetchSplits(symbol)
+	})
+}
+
+// fetchSplits performs the two uncached calls behind GetSplits.
+func (c *Client) fetchSplits(symbol string) ([]models.Split, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
@@ -1415,17 +1716,32 @@ func (c *Client) GetSplits(symbol string) ([]models.Split, error) {
 // sorted ascending by date with IsFuture flags. The oneof event details
 // (coupon/amortization/offer) are flattened into the model.
 func (c *Client) GetBondEvents(symbol string) ([]models.BondEvent, error) {
+	return calendarCached(c, bondEventsCalendar, symbol, func() ([]models.BondEvent, error) {
+		return c.fetchBondEvents(symbol)
+	})
+}
+
+// fetchBondEvents performs the two uncached calls behind GetBondEvents.
+func (c *Client) fetchBondEvents(symbol string) ([]models.BondEvent, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
 
-	from, to := pastYearRange()
 	var result []models.BondEvent
 
+	// No interval. This method — alone among the corporate-action calendars —
+	// refuses a date_to of today with `InvalidArgument: Invalid arguments:date_to`,
+	// which is exactly what pastYearRange() produces, so every bond in a
+	// portfolio failed its calendar and contributed nothing to the payout
+	// forecast. Measured against the live API on 2026-09-09: a date_to of today
+	// is refused at 30 days, six months and a year alike, while the same window
+	// ending yesterday is accepted — and so is a request carrying no interval,
+	// which the proto documents as defaulting to a year and which returned the
+	// identical set of events. Omitting it is therefore the same window with no
+	// boundary to get wrong. The dividend and split calendars accept a date_to
+	// of today and keep using pastYearRange().
 	pastResp, err := c.corporateActionsClient.GetPastBondsEvents(ctx, &corporateactions.GetPastBondsEventsRequest{
 		Symbol:        symbol,
 		SortDirection: corporateactions.SortDirection_DESC,
-		DateFrom:      from,
-		DateTo:        to,
 		Limit:         caCalendarLimit,
 	})
 	if err != nil {
@@ -1467,6 +1783,7 @@ func toProtoDate(t time.Time) *date.Date {
 func mapDividend(d *corporateactions.Dividend, isFuture bool) models.Dividend {
 	return models.Dividend{
 		Date:     formatDate(d.GetDate()),
+		When:     dateValue(d.GetDate()),
 		Amount:   formatDecimalOpt(d.GetAmount()),
 		Currency: d.GetCurrency(),
 		IsFuture: isFuture,
@@ -1485,10 +1802,20 @@ func mapSplit(s *corporateactions.SplitInfo, isFuture bool) models.Split {
 }
 
 func mapBondEvent(e *corporateactions.BondEvent, isFuture bool) models.BondEvent {
+	// The calendar names the currency with a symbol ("$", "¥", "₽", "€"). The
+	// model carries the ISO code the rest of the terminal uses, so a coupon in
+	// "₽" and a dividend in "RUB" land in one payout total. A symbol the table
+	// does not know is kept as sent: shown on screen, it beats a blank.
+	currency := strings.TrimSpace(e.GetCurrency().GetValue())
+	if code, ok := currencyCode(currency); ok {
+		currency = code
+	}
+
 	be := models.BondEvent{
 		Date:     formatDate(e.GetDate()),
+		When:     dateValue(e.GetDate()),
 		Value:    formatDecimalOpt(e.GetValue()),
-		Currency: e.GetCurrency().GetValue(),
+		Currency: currency,
 		IsFuture: isFuture,
 	}
 	// Kind from the enum first, then refined/confirmed by the present oneof branch.
@@ -1620,6 +1947,9 @@ func (c *Client) GetAssetInfo(accountID string, symbol string) (*models.AssetDet
 		return nil, fmt.Errorf("failed to get asset info for %s: %w", fullSymbol, err)
 	}
 
+	// Opening a profile files the currency for free, like a lot resolution.
+	c.storeInstrumentCurrency(resp, symbol, fullSymbol)
+
 	details := &models.AssetDetails{
 		Board:         resp.Board,
 		ID:            resp.Id,
@@ -1648,9 +1978,11 @@ func (c *Client) GetAssetInfo(accountID string, symbol string) (*models.AssetDet
 			details.ExpirationDate = od.ExpirationDate.AsTime().Local().Format("2006-01-02")
 		}
 	}
+	// bond_details.currency is not read: it is "%" on every bond, the unit of
+	// the price. The face currency is named only by the bond calendar (see
+	// BondFaceCurrencyCached).
 	if bd := resp.GetBondDetails(); bd != nil {
 		details.BondFaceValue = formatDecimal(bd.BondFaceValue)
-		details.BondFaceCurrency = bd.Currency
 	}
 
 	return details, nil
@@ -1658,10 +1990,16 @@ func (c *Client) GetAssetInfo(accountID string, symbol string) (*models.AssetDet
 
 // GetAssetParams returns trading parameters for a symbol
 func (c *Client) GetAssetParams(accountID string, symbol string) (*models.AssetParams, error) {
+	fullSymbol := c.getFullSymbol(symbol, accountID)
+
+	// The call hangs on a blocked instrument — the profile would wait out the
+	// whole deadline for parameters that say it cannot be traded.
+	if c.isBlocked(symbol, fullSymbol) {
+		return nil, fmt.Errorf("asset params for %s: %w", symbol, ErrBlockedInstrument)
+	}
+
 	ctx, cancel := c.getContext()
 	defer cancel()
-
-	fullSymbol := c.getFullSymbol(symbol, accountID)
 
 	resp, err := c.assetsClient.GetAssetParams(ctx, &assets.GetAssetParamsRequest{
 		Symbol:    fullSymbol,
@@ -1678,8 +2016,10 @@ func (c *Client) GetAssetParams(accountID string, symbol string) (*models.AssetP
 		TradeLotSize:  resp.TradeLotSize,
 	}
 
-	// Loading an instrument profile warms the trade lot cache for free.
+	// Loading an instrument profile warms the trade lot and unit value caches
+	// for free.
 	c.storeTradeLotSize(fullSymbol, float64(resp.TradeLotSize))
+	c.storeUnitValue(fullSymbol, resp)
 
 	// IsTradable
 	if resp.IsTradable != nil {
@@ -1774,6 +2114,80 @@ func formatValidBefore(vb orders.ValidBefore) string {
 }
 
 // parseDecimalFloat parses a google Decimal to float64, returns 0 on failure
+// mapCashBalances converts GetAccountResponse.cash into models.CashBalance.
+// google.type.Money keeps the fractional part in nanos with the same sign as
+// units, so -300.25 arrives as units=-300, nanos=-250000000 and the two simply
+// add up. A nil entry is dropped rather than turned into a zero balance in an
+// unnamed currency.
+func mapCashBalances(cash []*money.Money) []models.CashBalance {
+	if len(cash) == 0 {
+		return nil
+	}
+
+	balances := make([]models.CashBalance, 0, len(cash))
+	for _, m := range cash {
+		if m == nil {
+			continue
+		}
+		balances = append(balances, models.CashBalance{
+			Currency: m.CurrencyCode,
+			Amount:   moneyAmount(m),
+		})
+	}
+
+	if len(balances) == 0 {
+		return nil
+	}
+	return balances
+}
+
+// applyPortfolio reads the portfolio oneof into the account.
+//
+// HasMarginData is set only for MC and FORTS, the two branches that carry
+// numbers. MCT is an empty message in the proto and an absent oneof carries
+// nothing, so both leave the flag false and let the UI say "Н/Д" instead of
+// presenting a default zero as a real margin figure.
+func applyPortfolio(account *models.AccountInfo, resp *accounts.GetAccountResponse) {
+	switch {
+	case resp.GetPortfolioMc() != nil:
+		mc := resp.GetPortfolioMc()
+		account.PortfolioKind = "MC"
+		account.HasMarginData = true
+		account.AvailableCash = parseDecimalFloat(mc.AvailableCash)
+		account.InitialMargin = parseDecimalFloat(mc.InitialMargin)
+		account.MaintenanceMargin = parseDecimalFloat(mc.MaintenanceMargin)
+	case resp.GetPortfolioForts() != nil:
+		forts := resp.GetPortfolioForts()
+		account.PortfolioKind = "FORTS"
+		account.HasMarginData = true
+		account.AvailableCash = parseDecimalFloat(forts.AvailableCash)
+		account.MoneyReserved = parseDecimalFloat(forts.MoneyReserved)
+	case resp.GetPortfolioMct() != nil:
+		account.PortfolioKind = "MCT"
+	}
+}
+
+// timestampOrZero returns the local time of a protobuf timestamp, or the zero
+// time when the broker omitted it. AsTime() on a nil timestamp answers the Unix
+// epoch, which would read as a real date on screen.
+func timestampOrZero(ts *timestamppb.Timestamp) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime()
+}
+
+// moneyAmount converts a google.type.Money into a signed float.
+//
+// Units and nanos carry the same sign, so a charge of -1.50 arrives as
+// {Units: -1, Nanos: -500000000} and simply adds up.
+func moneyAmount(m *money.Money) float64 {
+	if m == nil {
+		return 0
+	}
+	return float64(m.Units) + float64(m.Nanos)/1e9
+}
+
 func parseDecimalFloat(d *decimal.Decimal) float64 {
 	if d == nil || d.Value == "" {
 		return 0
