@@ -164,22 +164,21 @@ type Bar struct {
 
 // AssetDetails represents detailed instrument information from GetAsset API
 type AssetDetails struct {
-	Board            string
-	ID               string
-	Ticker           string
-	MIC              string
-	ISIN             string
-	Type             string
-	Name             string
-	Decimals         int32
-	MinStep          int64
-	LotSize          string
-	ExpirationDate   string // formatted date string, empty if not applicable
-	QuoteCurrency    string
-	ContractSize     string // formatted contract size (futures, options)
-	Strike           string // formatted strike price (options only)
-	BondFaceValue    string // formatted face value (bonds only)
-	BondFaceCurrency string // currency of face value (bonds only)
+	Board          string
+	ID             string
+	Ticker         string
+	MIC            string
+	ISIN           string
+	Type           string
+	Name           string
+	Decimals       int32
+	MinStep        int64
+	LotSize        string
+	ExpirationDate string // formatted date string, empty if not applicable
+	QuoteCurrency  string
+	ContractSize   string // formatted contract size (futures, options)
+	Strike         string // formatted strike price (options only)
+	BondFaceValue  string // formatted face value (bonds only)
 }
 
 // AssetParams represents trading parameters for an instrument
@@ -320,6 +319,11 @@ type InstrumentProfile struct {
 	Dividends  []Dividend
 	Splits     []Split
 	BondEvents []BondEvent
+	// BondFaceCurrency is the ISO code of a bond's face currency, as the bond
+	// calendar names it; "" when the calendar did not load or names none. It is
+	// not in Details because GetAsset does not report it: bond_details.currency
+	// is "%" on every bond, the unit of the price.
+	BondFaceCurrency string
 }
 
 // Order represents an active order

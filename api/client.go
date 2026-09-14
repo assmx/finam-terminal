@@ -1978,9 +1978,11 @@ func (c *Client) GetAssetInfo(accountID string, symbol string) (*models.AssetDet
 			details.ExpirationDate = od.ExpirationDate.AsTime().Local().Format("2006-01-02")
 		}
 	}
+	// bond_details.currency is not read: it is "%" on every bond, the unit of
+	// the price. The face currency is named only by the bond calendar (see
+	// BondFaceCurrencyCached).
 	if bd := resp.GetBondDetails(); bd != nil {
 		details.BondFaceValue = formatDecimal(bd.BondFaceValue)
-		details.BondFaceCurrency = bd.Currency
 	}
 
 	return details, nil

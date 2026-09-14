@@ -86,11 +86,11 @@ func TestProfilePanel_BondEventsSections(t *testing.T) {
 	profile := &models.InstrumentProfile{
 		Symbol: "SU26238@TQOB",
 		Details: &models.AssetDetails{
-			Name:             "ОФЗ 26238",
-			Type:             "Bond",
-			BondFaceValue:    "1000",
-			BondFaceCurrency: "RUB",
+			Name:          "ОФЗ 26238",
+			Type:          "Bond",
+			BondFaceValue: "1000",
 		},
+		BondFaceCurrency: "RUB",
 		BondEvents: []models.BondEvent{
 			{Date: "2026-01-20", Kind: models.BondEventCoupon, Value: "34.9", Currency: "RUB",
 				RecordDate: "2026-01-18", Percent: "6.98", IsFuture: false},
