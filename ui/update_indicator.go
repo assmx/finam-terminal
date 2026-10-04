@@ -25,6 +25,9 @@ func (a *App) SetUpdateAvailable(latest string) {
 	if !updater.IsNewer(version.String(), latest) {
 		return
 	}
+	if !updater.UpdatesEnabled() {
+		latest = ""
+	}
 
 	a.updateMu.Lock()
 	a.latestVersion = latest
@@ -60,11 +63,15 @@ func (a *App) refreshHeader() {
 }
 
 // LatestVersion returns the newest release the application knows about, or an
-// empty string when the running version is up to date.
+// empty string when updates are disabled or the running version is current.
 func (a *App) LatestVersion() string {
 	a.updateMu.RLock()
-	defer a.updateMu.RUnlock()
-	return a.latestVersion
+	latest := a.latestVersion
+	a.updateMu.RUnlock()
+	if latest != "" && !updater.UpdatesEnabled() {
+		return ""
+	}
+	return latest
 }
 
 // UpdateRequested reports whether the user asked to install the update before
@@ -116,6 +123,12 @@ func (a *App) IsUpdateModalOpen() bool {
 // the TUI. The update itself runs in main.go after Run returns: the process
 // cannot replace and restart itself while tview owns the terminal.
 func (a *App) ConfirmUpdate() {
+	if !updater.UpdatesEnabled() {
+		a.CloseUpdateModal()
+		a.refreshHeader()
+		a.SetStatus("Обновления отключены в update.json", StatusInfo)
+		return
+	}
 	a.updateRequested.Store(true)
 	a.CloseUpdateModal()
 	a.Stop()
@@ -124,6 +137,11 @@ func (a *App) ConfirmUpdate() {
 // HandleUpdateKey reacts to the U hotkey: it opens the update dialog when an
 // update is available and otherwise says so in the status bar.
 func (a *App) HandleUpdateKey() {
+	if !updater.UpdatesEnabled() {
+		a.refreshHeader()
+		a.SetStatus("Обновления отключены в update.json", StatusInfo)
+		return
+	}
 	if a.LatestVersion() == "" {
 		a.SetStatus("Установлена последняя версия", StatusInfo)
 		return

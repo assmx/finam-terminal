@@ -26,33 +26,32 @@ type TabType int
 
 const (
 	TabPositions TabType = iota
-	TabHistory
 	TabOrders
+	TabCommodities
 	TabIndex
 	TabAnalytics
+	TabHistory
 )
 
-// tabLabels is the single source of truth for the tab order: the header renders
-// it and the ←/→ cycle wraps on its length, so adding a tab is a one-line
-// change here rather than a hunt for hardcoded counts.
-var tabLabels = []string{" Positions ", " History ", " Orders ", " Index ", " Analytics "}
-
-// TabCount is the number of tabs the ←/→ cycle walks.
-func TabCount() int { return len(tabLabels) }
+// tabLabels follows TabType; each view keeps its enabled navigation sequence.
+var tabLabels = [...]string{" Positions ", " Orders ", " Commodities ", " Index ", " Analytics ", " History "}
 
 // TabbedView manages a tabbed interface for positions, history, orders and the
 // index showcase
 type TabbedView struct {
 	*tview.Flex
 	ActiveTab TabType
+	tabs      []TabType
 
-	PositionsTable *tview.Table
-	HistoryTable   *tview.Table
-	OrdersTable    *tview.Table
-	IndexTable     *tview.Table
-	Analytics      *AnalyticsView
-	Content        *tview.Pages // To switch between tables
-	Header         *tview.TextView
+	PositionsTable   *tview.Table
+	HistoryTable     *tview.Table
+	OrdersTable      *tview.Table
+	IndexTable       *tview.Table
+	Analytics        *AnalyticsView
+	CommoditiesTable *tview.Table
+	Commodities      *CommodityView
+	Content          *tview.Pages // To switch between tables
+	Header           *tview.TextView
 }
 
 // NewPortfolioView creates a new PortfolioView component
@@ -81,14 +80,17 @@ func NewTabbedView() *TabbedView {
 	tv := &TabbedView{
 		Flex:           tview.NewFlex().SetDirection(tview.FlexRow),
 		ActiveTab:      TabPositions,
+		tabs:           []TabType{TabPositions, TabOrders, TabCommodities, TabIndex, TabAnalytics, TabHistory},
 		PositionsTable: createPositionsTable(),
 		HistoryTable:   createHistoryTable(),
 		OrdersTable:    createOrdersTable(),
 		IndexTable:     createIndexTable(),
 		Analytics:      NewAnalyticsView(),
+		Commodities:    newCommodityView(),
 		Content:        tview.NewPages(),
 		Header:         tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter),
 	}
+	tv.CommoditiesTable = tv.Commodities.Sources
 
 	tv.Header.SetBackgroundColor(tcell.ColorBlack)
 
@@ -97,6 +99,7 @@ func NewTabbedView() *TabbedView {
 	tv.Content.AddPage("orders", tv.OrdersTable, true, false)
 	tv.Content.AddPage("index", tv.IndexTable, true, false)
 	tv.Content.AddPage("analytics", tv.Analytics, true, false)
+	tv.Content.AddPage("commodities", tv.Commodities, true, false)
 
 	tv.AddItem(tv.Header, 1, 0, false)
 	tv.AddItem(tv.Content, 0, 1, true)
@@ -108,21 +111,53 @@ func NewTabbedView() *TabbedView {
 // UpdateHeader updates the visual representation of tabs
 func (tv *TabbedView) UpdateHeader() {
 	var headerText strings.Builder
-	for i, tab := range tabLabels {
-		if TabType(i) == tv.ActiveTab {
-			fmt.Fprintf(&headerText, "[black:yellow]%s[-]", tab)
+	for i, tab := range tv.tabs {
+		if tab == tv.ActiveTab {
+			fmt.Fprintf(&headerText, "[black:yellow]%s[-]", tabLabels[tab])
 		} else {
-			fmt.Fprintf(&headerText, "[white:black]%s[-]", tab)
+			fmt.Fprintf(&headerText, "[white:black]%s[-]", tabLabels[tab])
 		}
-		if i < len(tabLabels)-1 {
+		if i < len(tv.tabs)-1 {
 			headerText.WriteString(" ")
 		}
 	}
 	tv.Header.SetText(headerText.String())
 }
 
+// SetCommoditiesEnabled includes or removes Commodities from header and navigation.
+func (tv *TabbedView) SetCommoditiesEnabled(enabled bool) {
+	if enabled {
+		tv.tabs = []TabType{TabPositions, TabOrders, TabCommodities, TabIndex, TabAnalytics, TabHistory}
+	} else {
+		tv.tabs = []TabType{TabPositions, TabOrders, TabIndex, TabAnalytics, TabHistory}
+		if tv.ActiveTab == TabCommodities {
+			tv.SetTab(TabPositions)
+		}
+	}
+	tv.UpdateHeader()
+}
+
+func (tv *TabbedView) adjacentTab(delta int) TabType {
+	for i, tab := range tv.tabs {
+		if tab == tv.ActiveTab {
+			return tv.tabs[(i+delta+len(tv.tabs))%len(tv.tabs)]
+		}
+	}
+	return TabPositions
+}
+
 // SetTab switches the active tab
 func (tv *TabbedView) SetTab(tab TabType) {
+	enabled := false
+	for _, current := range tv.tabs {
+		if current == tab {
+			enabled = true
+			break
+		}
+	}
+	if !enabled {
+		return
+	}
 	tv.ActiveTab = tab
 	switch tab {
 	case TabPositions:
@@ -135,6 +170,8 @@ func (tv *TabbedView) SetTab(tab TabType) {
 		tv.Content.SwitchToPage("index")
 	case TabAnalytics:
 		tv.Content.SwitchToPage("analytics")
+	case TabCommodities:
+		tv.Content.SwitchToPage("commodities")
 	}
 	tv.UpdateHeader()
 }
@@ -316,6 +353,12 @@ func createIndexTable() *tview.Table {
 	// screen — without this the column headers disappear as soon as the user
 	// scrolls past the first screenful.
 	table.SetFixed(1, 0)
+	return table
+}
+
+func createCommoditiesTable() *tview.Table {
+	table := createIndexTable()
+	table.SetTitle(" Commodities ")
 	return table
 }
 

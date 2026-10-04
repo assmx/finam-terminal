@@ -18,9 +18,11 @@ type ProfilePanel struct {
 	ChartView *tview.TextView
 	Footer    *tview.TextView
 
-	app       *tview.Application
-	profile   *models.InstrumentProfile
-	timeframe int // 0=M5, 1=H1, 2=D, 3=W
+	app         *tview.Application
+	profile     *models.InstrumentProfile
+	timeframe   int // 0=M5, 1=H1, 2=D, 3=W
+	readOnly    bool
+	orderSymbol string // explicit MOEX counterpart for an informational profile
 }
 
 // GetProfile returns the current instrument profile (may be nil).
@@ -66,7 +68,28 @@ const profileFooterText = "[yellow]1[white] M5  [yellow]2[white] H1  [yellow]3[w
 
 // RestoreFooter resets the footer to the default hint text.
 func (p *ProfilePanel) RestoreFooter() {
+	if p.readOnly {
+		footer := strings.Replace(profileFooterText, "[yellow]A[white] Order  ", "", 1)
+		if p.orderSymbol != "" {
+			footer += "  [yellow]A[white] MOEX " + tview.Escape(p.orderSymbol)
+		}
+		p.Footer.SetText(footer)
+		return
+	}
 	p.Footer.SetText(profileFooterText)
+}
+
+// SetReadOnly hides order actions for informational instruments.
+func (p *ProfilePanel) SetReadOnly(readOnly bool) {
+	p.readOnly = readOnly
+	p.orderSymbol = ""
+	p.RestoreFooter()
+}
+
+// SetOrderSymbol names the linked exchange contract, not the displayed series.
+func (p *ProfilePanel) SetOrderSymbol(symbol string) {
+	p.orderSymbol = symbol
+	p.RestoreFooter()
 }
 
 // Update performs a full refresh of both the info panel and chart.

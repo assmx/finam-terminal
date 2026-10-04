@@ -49,8 +49,7 @@ func TestTabbedView_HeaderShowsIndexTab(t *testing.T) {
 }
 
 // TestInputHandler_TabCycleIncludesIndex verifies the forward cycle reaches the
-// Index tab, with focus following. The full five-tab cycle and its wrap are
-// covered by TestInputHandler_TabCycleIncludesAnalytics.
+// Index tab with focus following, after Orders and Commodities.
 func TestInputHandler_TabCycleIncludesIndex(t *testing.T) {
 	app := NewApp(&mockClient{}, nil)
 	setupInputHandlers(app)
@@ -62,8 +61,8 @@ func TestInputHandler_TabCycleIncludesIndex(t *testing.T) {
 		tab   TabType
 		table interface{}
 	}{
-		{TabHistory, tv.HistoryTable},
 		{TabOrders, tv.OrdersTable},
+		{TabCommodities, tv.CommoditiesTable},
 		{TabIndex, tv.IndexTable},
 	}
 
@@ -80,13 +79,14 @@ func TestInputHandler_TabCycleIncludesIndex(t *testing.T) {
 
 // TestInputHandler_PrevTabReachesIndexFromPositions verifies the backward cycle
 // wraps past the end of the tab list and reaches Index, rather than stopping or
-// going forward. Since Analytics joined the list, Index is two steps back.
+// going forward. Index precedes Analytics and History.
 func TestInputHandler_PrevTabReachesIndexFromPositions(t *testing.T) {
 	app := NewApp(&mockClient{}, nil)
 	setupInputHandlers(app)
 	app.app.SetFocus(app.portfolioView.TabbedView.PositionsTable)
 	capture := app.app.GetInputCapture()
 
+	capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
 	capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
 	capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
 

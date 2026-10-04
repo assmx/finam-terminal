@@ -96,12 +96,12 @@ func TestInputHandler_ArrowsSwitchTabs(t *testing.T) {
 	event := tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone)
 	capture(event)
 
-	if app.portfolioView.TabbedView.ActiveTab != TabHistory {
-		t.Errorf("Expected ActiveTab to be TabHistory, got %v", app.portfolioView.TabbedView.ActiveTab)
+	if app.portfolioView.TabbedView.ActiveTab != TabOrders {
+		t.Errorf("Expected ActiveTab to be TabOrders, got %v", app.portfolioView.TabbedView.ActiveTab)
 	}
 
-	if app.app.GetFocus() != app.portfolioView.TabbedView.HistoryTable {
-		t.Error("Expected focus to switch to HistoryTable")
+	if app.app.GetFocus() != app.portfolioView.TabbedView.OrdersTable {
+		t.Error("Expected focus to switch to OrdersTable")
 	}
 }
 

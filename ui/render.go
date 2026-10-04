@@ -626,7 +626,13 @@ func updateStatusBar(app *App) {
 
 	var shortcuts string
 	if app.profileOpen {
-		shortcuts = "[yellow]1-4[white] Timeframe  [yellow]A[white] Order  [yellow]R[white] Refresh  [yellow]ESC[white] Back"
+		shortcuts = "[yellow]1-4[white] Timeframe  [yellow]R[white] Refresh  [yellow]ESC[white] Back"
+		if !app.profilePanel.readOnly {
+			shortcuts += "  [yellow]A[white] Order"
+		}
+		if app.profilePanel.orderSymbol != "" {
+			shortcuts += "  [yellow]A[white] MOEX " + tview.Escape(app.profilePanel.orderSymbol)
+		}
 	} else {
 		shortcuts = "[yellow]F2[white] Refresh [yellow]Tab[white] Switch Area [yellow]←/→[white] Tabs [yellow]q[white] Quit"
 		// Check if TabbedView.PositionsTable is active and focused
@@ -641,6 +647,12 @@ func updateStatusBar(app *App) {
 		}
 		if app.portfolioView.TabbedView.ActiveTab == TabAnalytics {
 			shortcuts += " | [yellow]1-4[white] Экран [yellow]P[white] Период [yellow]R[white] Обновить [yellow]Enter[white] Профиль"
+		}
+		if app.portfolioView.TabbedView.ActiveTab == TabCommodities {
+			shortcuts += " | [yellow]Enter[white] Profile [yellow]R[white] Refresh"
+			if symbol := app.activeCommodityOrderSymbol(); symbol != "" {
+				shortcuts += " [yellow]A[white] MOEX " + tview.Escape(symbol)
+			}
 		}
 		// Check if TabbedView.IndexTable is active and focused
 		if app.portfolioView.TabbedView.ActiveTab == TabIndex &&

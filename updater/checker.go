@@ -15,12 +15,15 @@ const checkInterval = 24 * time.Hour
 // tests can pin time down instead of waiting for it.
 var nowFunc = time.Now
 
-// ShouldCheck reports whether an update check is due: either none has ever
-// run (a zero LastCheck) or the last one was at least checkInterval ago.
+// ShouldCheck reports whether updates are enabled and a check is due: either
+// none has ever run or the last one was at least checkInterval ago.
 //
 // A LastCheck in the future (a clock that moved backwards, a hand-edited
 // cache) simply postpones the next check; it never causes a check storm.
 func ShouldCheck(state State, now time.Time) bool {
+	if !state.Enabled {
+		return false
+	}
 	if state.LastCheck.IsZero() {
 		return true
 	}
@@ -37,10 +40,10 @@ type checker struct {
 
 // Run watches for new releases in the background until ctx is cancelled.
 //
-// It returns immediately — performing no request and writing no file — unless
-// current is a release version: development builds are never nagged about
-// updates. Otherwise it checks straight away when a check is due, then once
-// per checkInterval, saving each successful result to the update cache.
+// It returns immediately — performing no request and writing no file — when
+// updates are disabled or current is not a release version. Otherwise it
+// checks straight away when due, then once per checkInterval, saving each
+// successful result to the update cache.
 //
 // onNewVersion is invoked with the release tag when a newer version is found,
 // at most once per version for the lifetime of the loop. It is called from the
@@ -65,6 +68,9 @@ func Run(ctx context.Context, current string, onNewVersion func(latest string)) 
 			log.Printf("[WARN] Update check disabled: %v", err)
 			return
 		}
+		if !state.Enabled {
+			return
+		}
 
 		wait := checkInterval
 		if ShouldCheck(state, nowFunc()) {
@@ -87,17 +93,33 @@ func Run(ctx context.Context, current string, onNewVersion func(latest string)) 
 // The cache is updated only on success, so a failed check does not push the
 // next attempt a full day out.
 func (c *checker) checkOnce(ctx context.Context) error {
+	state, err := LoadState()
+	if err != nil {
+		return err
+	}
+	if !state.Enabled {
+		return nil
+	}
+
 	rel, err := FetchLatestRelease(ctx)
 	if err != nil {
 		return err
 	}
 
-	state := State{
-		LastCheck:     nowFunc(),
-		LatestVersion: rel.TagName,
-		ReleaseURL:    rel.HTMLURL,
-		PublishedAt:   rel.PublishedAt,
+	// The user may disable updates while the request is in flight. Read the
+	// setting again before saving or announcing, rather than overwriting it
+	// with the enabled value from the start of the check.
+	state, err = LoadState()
+	if err != nil {
+		return err
 	}
+	if !state.Enabled {
+		return nil
+	}
+	state.LastCheck = nowFunc()
+	state.LatestVersion = rel.TagName
+	state.ReleaseURL = rel.HTMLURL
+	state.PublishedAt = rel.PublishedAt
 	if err := SaveState(state); err != nil {
 		log.Printf("[WARN] Update state not saved: %v", err)
 	}

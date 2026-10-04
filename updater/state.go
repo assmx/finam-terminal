@@ -20,12 +20,13 @@ const stateFileName = "update.json"
 // without touching the real home directory.
 var stateDirFunc = config.UserConfigDir
 
-// State is the persisted result of the last update check.
-//
-// It is a cache, never a source of truth: a missing, empty or damaged file is
-// always interpreted as "no check has ever run" so a bad cache can never keep
-// the terminal from starting.
+// State holds the update setting and the cached result of the last check.
+// A missing, empty or damaged file enables updates with no known release, so
+// existing installations keep their previous behaviour.
 type State struct {
+	// Enabled controls automatic checks, notifications and in-app updates.
+	// LoadState defaults it to true when the file or key is absent.
+	Enabled bool `json:"enabled"`
 	// LastCheck is when the GitHub API was last queried successfully.
 	LastCheck time.Time `json:"last_check"`
 	// LatestVersion is the tag of the newest published release, e.g. "v0.14.0".
@@ -38,10 +39,10 @@ type State struct {
 
 // LoadState reads the update cache from ~/.finam-cli/update.json.
 //
-// A missing, empty or unparsable file yields the zero State and a nil error —
-// the caller simply learns that no check result is known. A [WARN] line is
-// logged for a damaged file so the situation is diagnosable. An error is
-// returned only when the config directory itself cannot be resolved.
+// A missing, empty or unparsable file yields Enabled=true with an empty cache
+// and a nil error. A [WARN] line is logged for a damaged file so the situation
+// is diagnosable. An error is returned only when the config directory itself
+// cannot be resolved.
 func LoadState() (State, error) {
 	dir, err := stateDirFunc()
 	if err != nil {
@@ -54,18 +55,25 @@ func LoadState() (State, error) {
 		if !os.IsNotExist(err) {
 			log.Printf("[WARN] Update state unreadable: %v", err)
 		}
-		return State{}, nil
+		return State{Enabled: true}, nil
 	}
 	if len(data) == 0 {
-		return State{}, nil
+		return State{Enabled: true}, nil
 	}
 
-	var state State
+	state := State{Enabled: true}
 	if err := json.Unmarshal(data, &state); err != nil {
 		log.Printf("[WARN] Update state corrupted, ignoring: %v", err)
-		return State{}, nil
+		return State{Enabled: true}, nil
 	}
 	return state, nil
+}
+
+// UpdatesEnabled reads the user's update setting. If the config directory
+// cannot be resolved, updates stay off just as the background checker does.
+func UpdatesEnabled() bool {
+	state, err := LoadState()
+	return err == nil && state.Enabled
 }
 
 // SaveState writes the update cache atomically: the JSON is written to a

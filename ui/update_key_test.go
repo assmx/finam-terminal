@@ -130,3 +130,47 @@ func TestUpdateKeyDoesNotShadowExistingBindings(t *testing.T) {
 		}
 	}
 }
+
+func TestDisabledUpdateKeyDoesNotOpenModal(t *testing.T) {
+	asReleaseBuild(t)
+	app := NewApp(&mockClient{}, nil)
+	app.SetUpdateAvailable("v0.14.0")
+	disableTestUpdates(t)
+	for _, r := range []rune{'u', 'U', 'г', 'Г'} {
+		if res := pressRune(app, r); res != nil {
+			t.Errorf("pressing %q returned %v, want the event consumed", r, res)
+		}
+		if app.IsUpdateModalOpen() || app.UpdateRequested() {
+			t.Errorf("pressing %q activated disabled updates", r)
+		}
+		if got := app.header.GetText(true); strings.Contains(got, "⚡") {
+			t.Errorf("disabled update key left the header notification visible: %q", got)
+		}
+		if !strings.Contains(app.statusMessage, "Обновления отключены") {
+			t.Errorf("status message = %q, want disabled updates explained", app.statusMessage)
+		}
+	}
+}
+
+func TestDisabledUpdateCannotConfirmOpenModal(t *testing.T) {
+	asReleaseBuild(t)
+	app := NewApp(&mockClient{}, nil)
+	app.SetUpdateAvailable("v0.14.0")
+	app.OpenUpdateModal()
+	if !app.IsUpdateModalOpen() {
+		t.Fatal("enabled update modal did not open")
+	}
+	disableTestUpdates(t)
+	app.ConfirmUpdate()
+	if app.UpdateRequested() {
+		t.Error("confirming after disabling updates requested an installation")
+	}
+	if app.IsUpdateModalOpen() {
+		t.Error("disabled update modal remained open")
+	}
+	select {
+	case <-app.stopChan:
+		t.Error("disabled update confirmation stopped the TUI")
+	default:
+	}
+}

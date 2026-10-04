@@ -3,6 +3,7 @@ package ui
 import (
 	"finam-terminal/models"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -191,6 +192,9 @@ func (a *App) loadProfileAsync(accountID, symbol string, timeframeIdx int) {
 	go func() {
 		profile := a.loadProfileSync(accountID, symbol, timeframeIdx)
 
+		if a.ctx.Err() != nil {
+			return
+		}
 		a.app.QueueUpdateDraw(func() {
 			if a.profileOpen && a.profileSymbol == symbol {
 				a.profilePanel.Update(profile)
@@ -204,6 +208,9 @@ func (a *App) loadProfileAsync(accountID, symbol string, timeframeIdx int) {
 // out in parallel. It blocks, so it belongs off the event loop; it is separate
 // from loadProfileAsync so tests can drive it without a running application.
 func (a *App) loadProfileSync(accountID, symbol string, timeframeIdx int) *models.InstrumentProfile {
+	if c, ok := a.commodityForSymbol(symbol); ok {
+		return a.loadCommodityProfileSync(c, timeframeIdx)
+	}
 	profile := &models.InstrumentProfile{Symbol: symbol}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -347,6 +354,7 @@ func (a *App) loadProfileBarsAsync(accountID, symbol string, timeframeIdx int) {
 
 // refreshProfileQuoteAndBars refreshes only quote and bars for an open profile.
 func (a *App) refreshProfileQuoteAndBars(accountID, symbol string, timeframeIdx int) {
+	_, commodityProfile := a.commodityForSymbol(symbol)
 	go func() {
 		var wg sync.WaitGroup
 		var newQuote *models.Quote
@@ -355,9 +363,19 @@ func (a *App) refreshProfileQuoteAndBars(accountID, symbol string, timeframeIdx 
 
 		// The stream keeps the quote fresh; bars still need polling
 		// (SubscribeBars is out of scope).
-		if !a.shouldSkipQuotePolling(accountID) {
+		skipQuote := a.shouldSkipQuotePolling(accountID)
+		if commodityProfile {
+			skipQuote = slices.Contains(a.client.SubscribedSymbols(), symbol)
+		}
+		if !skipQuote {
 			wg.Go(func() {
-				quotes, err := a.client.GetQuotes(accountID, []string{symbol})
+				var quotes map[string]*models.Quote
+				var err error
+				if commodityProfile {
+					quotes, err = a.client.GetMarketQuotes([]string{symbol})
+				} else {
+					quotes, err = a.client.GetQuotes(accountID, []string{symbol})
+				}
 				if err != nil {
 					return
 				}
@@ -384,6 +402,9 @@ func (a *App) refreshProfileQuoteAndBars(accountID, symbol string, timeframeIdx 
 		})
 
 		wg.Wait()
+		if a.ctx.Err() != nil {
+			return
+		}
 
 		a.app.QueueUpdateDraw(func() {
 			if a.profileOpen && a.profileSymbol == symbol {
@@ -425,6 +446,11 @@ func (a *App) backgroundRefresh() {
 				// decides for itself whether it is allowed to run.
 				a.evaluateIndexStreamHealth()
 				a.pollIndexQuotesAsync(false)
+				a.refreshCommodityFuturesDaily(time.Now())
+				a.pollCommodityQuotesAsync(false)
+				if a.profileOpen && a.profilePanel.readOnly {
+					a.refreshProfileQuoteAndBars("", a.profileSymbol, a.profileTimeframe)
+				}
 
 				// Prioritize the active account
 				if a.selectedIdx >= 0 && a.selectedIdx < len(a.accounts) {
@@ -432,7 +458,7 @@ func (a *App) backgroundRefresh() {
 					a.loadDataAsync(activeID)
 
 					// Refresh profile if open
-					if a.profileOpen && a.profileSymbol != "" {
+					if a.profileOpen && a.profileSymbol != "" && !a.profilePanel.readOnly {
 						a.refreshProfileQuoteAndBars(activeID, a.profileSymbol, a.profileTimeframe)
 					}
 

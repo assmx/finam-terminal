@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"finam-terminal/api"
+	"finam-terminal/config"
 	"finam-terminal/models"
 
 	"github.com/FinamWeb/finam-trade-api/go/grpc/tradeapi/v1/marketdata"
@@ -24,6 +25,10 @@ type APIClient interface {
 	GetAccounts() ([]models.AccountInfo, error)
 	GetAccountDetails(accountID string) (*models.AccountInfo, []models.Position, error)
 	GetQuotes(accountID string, symbols []string) (map[string]*models.Quote, error)
+	// GetMarketQuotes fetches known full symbols without resolving order lots.
+	GetMarketQuotes(symbols []string) (map[string]*models.Quote, error)
+	GetMOEXFuture(accountID, mask string, rollDays int) (models.FutureContract, error)
+	CachedMOEXFuture(mask string) (models.FutureContract, time.Time, bool)
 	PlaceOrder(accountID string, symbol string, buySell string, quantity float64, params *models.OrderParams) (string, error)
 	PlaceSLTPOrder(accountID, symbol, buySell string, slQty, slPrice, tpQty, tpPrice float64) (string, error)
 	ClosePosition(accountID string, symbol string, currentQuantity string, closeQuantity float64) (string, error)
@@ -158,6 +163,16 @@ type App struct {
 	// Analytics tab
 	analytics *analyticsState
 
+	// Commodities are account-independent continuous international futures.
+	commodityQuotes            map[string]*models.Quote
+	commodityLoading           bool
+	commodityLimited           bool
+	commodityLastPoll          time.Time
+	commodityMetadataLimitedAt time.Time
+	commodities                []config.CommodityItem
+	commoditiesEnabled         bool
+	commodityFutures           *commodityFuturesState
+
 	// Profile overlay
 	profilePanel     *ProfilePanel
 	profileSymbol    string
@@ -182,21 +197,23 @@ type DataMutex struct {
 // NewApp creates a new TUI application
 func NewApp(client APIClient, accounts []models.AccountInfo) *App {
 	a := &App{
-		app:          tview.NewApplication(),
-		client:       client,
-		accounts:     accounts,
-		positions:    make(map[string][]models.Position),
-		history:      make(map[string][]models.Trade),
-		activeOrders: make(map[string][]models.Order),
-		quotes:       make(map[string]map[string]*models.Quote),
-		indexQuotes:  make(map[string]*models.Quote),
-		selectedIdx:  0,
-		stopChan:     make(chan struct{}),
-		pages:        tview.NewPages(),
-		analytics:    newAnalyticsState(),
+		app:             tview.NewApplication(),
+		client:          client,
+		accounts:        accounts,
+		positions:       make(map[string][]models.Position),
+		history:         make(map[string][]models.Trade),
+		activeOrders:    make(map[string][]models.Order),
+		quotes:          make(map[string]map[string]*models.Quote),
+		indexQuotes:     make(map[string]*models.Quote),
+		commodityQuotes: make(map[string]*models.Quote),
+		selectedIdx:     0,
+		stopChan:        make(chan struct{}),
+		pages:           tview.NewPages(),
+		analytics:       newAnalyticsState(),
 	}
 	a.ctx, a.ctxCancel = context.WithCancel(context.Background())
 	a.portfolioView = NewPortfolioView(a.app)
+	a.ConfigureCommodities(config.DefaultCommodities())
 	a.header = createHeader()
 	a.statusBar = createStatusBar()
 
@@ -277,20 +294,35 @@ func (a *App) IsSearchModalOpen() bool {
 
 // OpenOrderModalWithTicker opens the order entry modal with a pre-populated ticker
 func (a *App) OpenOrderModalWithTicker(ticker string) {
+	commodityOrder := a.commoditiesTabActive()
+	if commodityOrder {
+		target := a.commodityOrderTarget(ticker)
+		if target == "" {
+			a.ShowError("Для товара не найден действующий фьючерс MOEX; R — обновить")
+			return
+		}
+		ticker = target
+	}
 	a.orderModal.SetInstrument(ticker)
 	a.orderModal.SetQuantity(0)
 	a.orderModal.ResetOrderType()
 	a.orderModal.SetDisplayName(a.client.GetInstrumentName(ticker))
 
-	// Fetch current price via snapshots (same as positions list)
+	// The cached comparison price is a fallback. Preserve the snapshot warmup
+	// before showing the form so the trade lot is resolved before submission.
 	a.dataMutex.RLock()
 	accountID := ""
 	if a.selectedIdx >= 0 && a.selectedIdx < len(a.accounts) {
 		accountID = a.accounts[a.selectedIdx].ID
 	}
+	var price float64
+	if commodityOrder {
+		if value, valid := commodityQuotePrice(a.commodityQuotes[ticker]); valid {
+			price = value
+		}
+	}
 	a.dataMutex.RUnlock()
 
-	var price float64
 	if accountID != "" {
 		if snapshots, err := a.client.GetSnapshots(accountID, []string{ticker}); err == nil {
 			if q, ok := snapshots[ticker]; ok {
@@ -391,6 +423,12 @@ func (a *App) IsCancelConfirmOpen() bool {
 
 // SubmitOrder submits a new order based on the order submission from the modal
 func (a *App) SubmitOrder(sub OrderSubmission) error {
+	if a.commoditiesTabActive() && sub.Instrument != a.activeCommodityOrderSymbol() {
+		return fmt.Errorf("Commodities: контракт сменился или изменён; откройте заявку заново на действующий фьючерс MOEX")
+	}
+	if a.commoditiesTabActive() && sub.Instrument == "" {
+		return fmt.Errorf("Commodities: связанный символ MOEX не настроен")
+	}
 	a.dataMutex.RLock()
 	if a.selectedIdx >= len(a.accounts) {
 		a.dataMutex.RUnlock()
@@ -449,6 +487,9 @@ func (a *App) SubmitOrder(sub OrderSubmission) error {
 
 // SubmitClosePosition submits an order to close an existing position
 func (a *App) SubmitClosePosition(closeQuantity float64) error {
+	if a.portfolioView.TabbedView.ActiveTab == TabCommodities {
+		return fmt.Errorf("Commodities: закрытие позиции доступно во вкладке Positions")
+	}
 	// Get selected row to identify the position again
 	row, _ := a.portfolioView.TabbedView.PositionsTable.GetSelection()
 	if row <= 0 {
@@ -965,6 +1006,11 @@ func (a *App) OpenProfile() {
 // OpenProfileForSymbol opens the profile overlay for an arbitrary symbol.
 func (a *App) OpenProfileForSymbol(symbol string) {
 	a.profileSymbol = symbol
+	_, isCommodity := a.commodityForSymbol(symbol)
+	a.profilePanel.SetReadOnly(isCommodity)
+	if isCommodity {
+		a.profilePanel.SetOrderSymbol(a.commodityOrderSymbol(symbol))
+	}
 	a.profileOpen = true
 	a.profilePanel.SetTimeframe(a.profileTimeframe)
 	a.profilePanel.Update(nil) // Show loading state
@@ -980,7 +1026,7 @@ func (a *App) OpenProfileForSymbol(symbol string) {
 
 	a.recomputeStreamSymbols()
 
-	if accountID != "" {
+	if accountID != "" || a.commoditiesTabActive() {
 		a.loadProfileAsync(accountID, symbol, a.profileTimeframe)
 	}
 }
@@ -1013,6 +1059,8 @@ func (a *App) activeTabTable() tview.Primitive {
 		return tv.IndexTable
 	case TabAnalytics:
 		return tv.Analytics.Focusable()
+	case TabCommodities:
+		return tv.CommoditiesTable
 	default:
 		return tv.PositionsTable
 	}
@@ -1038,7 +1086,12 @@ func (a *App) switchProfileTimeframe(idx int) {
 	}
 	a.dataMutex.RUnlock()
 
-	if accountID != "" && a.profileSymbol != "" {
+	_, isCommodity := a.commodityForSymbol(a.profileSymbol)
+	if isCommodity {
+		accountID = ""
+	}
+
+	if (accountID != "" || isCommodity || a.commoditiesTabActive()) && a.profileSymbol != "" {
 		a.loadProfileBarsAsync(accountID, a.profileSymbol, idx)
 	}
 }

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Configurable Commodities tab**: NG, Brent, palladium, platinum, gold, silver, cocoa, coffee and ES international continuous futures. `~/.finam-cli/commodities.json` controls visibility, order, descriptions, quote precision, MOEX family masks, rollover lead days and scale/FX conversion. The source and native MOEX tables share six columns and physical widths. MOEX prices are converted into source units below the detail, followed by a separate `converted MOEX − source` delta. ES is a SPY ETF proxy, not an identical underlying. All quote legs share the existing sharded stream and paced fallback.
+- **Update enable setting**: `enabled` in `~/.finam-cli/update.json` disables background checks, startup offers, indicators and in-app updates without losing cached release information. Existing files without the key retain enabled updates.
+
+### Changed
+- Tab order: Positions → Orders → Commodities → Index → Analytics → History. Disabled Commodities is omitted from the header and navigation.
+- Commodities resolves MOEX series by Finam's actual expiration timestamps and retains one active contract per family mask in the separate `~/.finam-cli/commodities_cache.json` (`updated_at`, `roll_days`, `contract`), shared across accounts. Daily tracking refreshes only the active contract; family discovery runs initially or at the rollover boundary. Atomic cache writes never modify user settings. Missing or corrupt cache data does not disable the tab and is rebuilt after a successful lookup. The old settings `futures` section is no longer used. Failed broker refreshes retain the previous contract and timestamp; expired contracts are excluded from display, subscriptions and orders.
+- Removed the Commodities `Unit` column and the `unit` configuration field; profiles display the configured name without a unit suffix. Legacy `moex_symbol` must be replaced by `moex_mask` and `roll_days`.
+- MOEX detail tickers use the same catalogue display names as History; both `Name` columns use the configured commodity description. Selection updates native quotes, conversion, delta and the order shortcut immediately.
+- Commodity MOEX details are key-value groups below a separator: white contract plus expiry, MOEX price converted into Commodity units and converted-MOEX-minus-Commodity delta, and independent source/native quote timestamps. The `Updated` column is removed from both quote tables. Missing source prices preserve native conversion but leave delta unavailable; missing native/required FX leaves both unavailable. Expiry retains the independent `expiry_warning_days` window (default 5; zero disables warnings).
+- Commodity source and MOEX tables share a fixed Ticker column and fixed-width numeric columns; Name absorbs spare terminal width.
+- Contract MOEX and conversion groups use compact 26-column widths; updates retain 32 columns for full timestamps. Two-column gaps remain fixed. Conversion starts below Name; groups stack on narrow terminals.
+- Pure commodity conversion and expiration selection now live in the `commodity` package rather than `config`, with no I/O or UI dependencies.
+
+### Fixed
+- Embedded commodity defaults now use the shipped `config/example/commodities.json`.
+- Same-day empty futures selections are invalidated when `roll_days` changes, including after restart.
+- Switching an international commodity profile's chart timeframe no longer triggers account-scoped asset and lot metadata requests.
+
 ## [v0.17.0] - 2026-09-14
 
 ### Added

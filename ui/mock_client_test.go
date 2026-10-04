@@ -29,6 +29,8 @@ type mockClient struct {
 	SetQuoteSymbolsFunc   func(symbols []string)
 	SubscribedSymbolsFunc func() []string
 	GetInstrumentNameFunc func(key string) string
+	GetMOEXFutureFunc     func(accountID, mask string, rollDays int) (models.FutureContract, error)
+	CachedMOEXFutureFunc  func(mask string) (models.FutureContract, time.Time, bool)
 
 	GetTradeHistoryFunc func(accountID string) ([]models.Trade, error)
 	GetActiveOrdersFunc func(accountID string) ([]models.Order, error)
@@ -378,3 +380,21 @@ func (m *mockClient) CancelOrder(accountID, orderID string) error {
 // mockClient must satisfy the interface the App is given; a compile-time check
 // beats discovering a missing method inside a goroutine at run time.
 var _ APIClient = (*mockClient)(nil)
+
+func (m *mockClient) GetMarketQuotes(symbols []string) (map[string]*models.Quote, error) {
+	return m.GetQuotes("", symbols)
+}
+
+func (m *mockClient) GetMOEXFuture(accountID, mask string, rollDays int) (models.FutureContract, error) {
+	if m.GetMOEXFutureFunc != nil {
+		return m.GetMOEXFutureFunc(accountID, mask, rollDays)
+	}
+	return models.FutureContract{}, nil
+}
+
+func (m *mockClient) CachedMOEXFuture(mask string) (models.FutureContract, time.Time, bool) {
+	if m.CachedMOEXFutureFunc != nil {
+		return m.CachedMOEXFutureFunc(mask)
+	}
+	return models.FutureContract{}, time.Time{}, false
+}

@@ -1563,6 +1563,63 @@ func TestGetBars(t *testing.T) {
 	}
 }
 
+func TestGetBarsUnknownInternationalSymbolAccountMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		accountID    string
+		wantMetadata int
+	}{
+		{"accountless chart", "", 0},
+		{"account scoped chart", "ACC1", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const symbol = "CLZ6@NYMEX"
+			assetCalls, paramsCalls, barsCalls := 0, 0, 0
+			at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+			client := &Client{
+				assetsClient: &mockAssetsServiceClient{
+					GetAssetFunc: func(_ context.Context, req *assets.GetAssetRequest, _ ...grpc.CallOption) (*assets.GetAssetResponse, error) {
+						assetCalls++
+						if req.Symbol != symbol || req.AccountId != tt.accountID {
+							t.Fatalf("asset request = %+v", req)
+						}
+						return &assets.GetAssetResponse{Ticker: "CLZ6", Mic: "NYMEX", LotSize: &decimal.Decimal{Value: "1"}}, nil
+					},
+					GetAssetParamsFunc: func(_ context.Context, req *assets.GetAssetParamsRequest, _ ...grpc.CallOption) (*assets.GetAssetParamsResponse, error) {
+						paramsCalls++
+						if req.Symbol != symbol || req.AccountId != tt.accountID {
+							t.Fatalf("parameters request = %+v", req)
+						}
+						return &assets.GetAssetParamsResponse{Symbol: symbol, TradeLotSize: 1}, nil
+					},
+				},
+				marketDataClient: &mockMarketDataServiceClient{
+					BarsFunc: func(_ context.Context, req *marketdata.BarsRequest, _ ...grpc.CallOption) (*marketdata.BarsResponse, error) {
+						barsCalls++
+						if req.Symbol != symbol || req.Timeframe != marketdata.TimeFrame_TIME_FRAME_H1 {
+							t.Fatalf("bars request = %+v", req)
+						}
+						return &marketdata.BarsResponse{Bars: []*marketdata.Bar{
+							{Timestamp: timestamppb.New(at), Close: &decimal.Decimal{Value: "70.50"}},
+						}}, nil
+					},
+				},
+			}
+			// Repeat the lookup: accountless charts must not keep spending
+			// guaranteed-to-fail metadata calls on an unknown full symbol.
+			for range 2 {
+				bars, err := client.GetBars(tt.accountID, symbol, marketdata.TimeFrame_TIME_FRAME_H1, at.Add(-time.Hour), at)
+				if err != nil || len(bars) != 1 || bars[0].Close != 70.5 {
+					t.Fatalf("international chart = %+v, %v", bars, err)
+				}
+			}
+			if barsCalls != 2 || assetCalls != tt.wantMetadata || paramsCalls != tt.wantMetadata {
+				t.Fatalf("RPCs bars/asset/parameters = %d/%d/%d; want 2/%d/%d", barsCalls, assetCalls, paramsCalls, tt.wantMetadata, tt.wantMetadata)
+			}
+		})
+	}
+}
+
 func TestGetAssetInfo(t *testing.T) {
 	mockAssets := &mockAssetsServiceClient{
 		GetAssetFunc: func(ctx context.Context, in *assets.GetAssetRequest, opts ...grpc.CallOption) (*assets.GetAssetResponse, error) {

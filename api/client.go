@@ -79,6 +79,16 @@ type Client struct {
 	securityCache           []models.SecurityInfo
 	assetMutex              sync.RWMutex
 
+	// Active RTSX futures from the same startup catalogue; nil means loading failed.
+	futuresCandidates  []models.SecurityInfo
+	futuresCatalogueAt time.Time  // guarded by assetMutex
+	futuresMu          sync.Mutex // serializes metadata passes
+	futuresCacheMu     sync.RWMutex
+	futuresCacheLoaded bool
+	futuresCacheDir    string                           // optional explicit directory for isolated tests
+	futuresCache       map[string]moexFuturesCacheEntry // selected contract per mask, shared by accounts
+	futuresContext     context.Context                  // shares the existing Close cancellation
+
 	// Corporate-action calendars (dividends, splits, bond events), cached per
 	// symbol for calendarCacheTTL. These change on the scale of months, so the
 	// Payouts screen and the instrument profile share one day-long answer
@@ -163,6 +173,7 @@ func newClientFromConn(conn *grpc.ClientConn, apiToken string) (*Client, error) 
 	// Start background token refresh via the SubscribeJwtRenewal stream
 	refreshCtx, cancel := context.WithCancel(context.Background())
 	client.refreshCancel = cancel
+	client.futuresContext = refreshCtx
 	go client.subscribeJwtRenewal(refreshCtx)
 
 	// The stream is the fast path; the watchdog is what survives a dropped
@@ -348,12 +359,19 @@ func (c *Client) loadAssetCache() error {
 		c.logGRPCError("AssetsService", "Assets", err)
 		return fmt.Errorf("failed to get assets: %w", err)
 	}
+	if resp == nil {
+		return fmt.Errorf("failed to get assets: empty response")
+	}
 
 	c.assetMutex.Lock()
 	defer c.assetMutex.Unlock()
 
 	c.securityCache = make([]models.SecurityInfo, 0, len(resp.Assets))
+	c.futuresCandidates = make([]models.SecurityInfo, 0)
 	for _, asset := range resp.Assets {
+		if asset == nil {
+			continue
+		}
 		// Construct full symbol if not provided or to ensure format
 		fullSymbol := asset.Symbol
 		if !strings.Contains(fullSymbol, "@") && asset.Ticker != "" && asset.Mic != "" {
@@ -398,10 +416,17 @@ func (c *Client) loadAssetCache() error {
 			Type:   asset.Type,
 		})
 
+		if !asset.IsArchived && asset.Type == "FUTURES" && isMOEXFutureSymbol(fullSymbol) {
+			c.futuresCandidates = append(c.futuresCandidates, models.SecurityInfo{
+				Ticker: asset.Ticker, Symbol: fullSymbol, Name: asset.Name, Type: asset.Type,
+			})
+		}
+
 		// A blocked instrument's twin is what recognises a position the broker
 		// sends without a MIC — from the list already loaded, for free.
 		c.fileBlockedTwinLocked(asset.Ticker, fullSymbol, asset.Name)
 	}
+	c.futuresCatalogueAt = time.Now()
 
 	log.Printf("[INFO] Loaded %d instruments into cache", len(resp.Assets))
 	if n := len(c.blockedTwinCache); n > 0 {
@@ -592,22 +617,31 @@ func (c *Client) fetchAssetLotSize(symbol string, accountID string) {
 	// The same answer names the instrument's currency and a bond's face value.
 	c.storeInstrumentCurrency(resp, symbol)
 
-	if resp.LotSize != nil {
-		lotSizeStr := formatDecimal(resp.LotSize)
-		lotSize, parseErr := strconv.ParseFloat(strings.ReplaceAll(lotSizeStr, ",", "."), 64)
-		if parseErr != nil {
-			log.Printf("[WARN] Failed to parse lot size '%s' for %s: %v", lotSizeStr, symbol, parseErr)
-			return
-		}
+	c.storeAssetLotSize(resp, symbol)
+}
 
-		c.assetMutex.Lock()
-		c.assetLotCache[symbol] = lotSize
-		if resp.Ticker != "" {
-			c.assetLotCache[resp.Ticker] = lotSize
-		}
-		c.assetMutex.Unlock()
-		log.Printf("[DEBUG] Fetched lot size for %s: %v", symbol, lotSize)
+// A metadata lookup and a lot lookup receive the same asset fields. Keep the
+// answer so opening a commodity order needs only the separate trade-lot RPC.
+func (c *Client) storeAssetLotSize(resp *assets.GetAssetResponse, symbol string) {
+	if resp == nil || resp.LotSize == nil {
+		return
 	}
+	lotSizeStr := formatDecimal(resp.LotSize)
+	lotSize, parseErr := strconv.ParseFloat(strings.ReplaceAll(lotSizeStr, ",", "."), 64)
+	if parseErr != nil {
+		log.Printf("[WARN] Failed to parse lot size '%s' for %s: %v", lotSizeStr, symbol, parseErr)
+		return
+	}
+	c.assetMutex.Lock()
+	if c.assetLotCache == nil {
+		c.assetLotCache = make(map[string]float64)
+	}
+	c.assetLotCache[symbol] = lotSize
+	if resp.Ticker != "" {
+		c.assetLotCache[resp.Ticker] = lotSize
+	}
+	c.assetMutex.Unlock()
+	log.Printf("[DEBUG] Fetched lot size for %s: %v", symbol, lotSize)
 }
 
 // fetchTradeLotSize fetches the trade lot size (GetAssetParams.trade_lot_size,

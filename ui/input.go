@@ -12,6 +12,10 @@ func setupInputHandlers(app *App) {
 	}
 
 	refresh := func() {
+		if app.commoditiesTabActive() {
+			app.pollCommodityQuotesAsync(true)
+			return
+		}
 		// The Index tab is account-independent, so it refreshes before the
 		// account guard below — it works even with no account selected.
 		if app.portfolioView.TabbedView.ActiveTab == TabIndex {
@@ -89,6 +93,8 @@ func setupInputHandlers(app *App) {
 			app.app.SetFocus(app.portfolioView.TabbedView.IndexTable)
 		case TabAnalytics:
 			app.app.SetFocus(app.portfolioView.TabbedView.Analytics.Focusable())
+		case TabCommodities:
+			app.app.SetFocus(app.portfolioView.TabbedView.CommoditiesTable)
 		}
 
 		if tab == TabAnalytics {
@@ -105,10 +111,15 @@ func setupInputHandlers(app *App) {
 			// tab from a single bounded batch.
 			app.pollIndexQuotesAsync(false)
 		}
+		if tab == TabCommodities {
+			updateCommoditiesTable(app)
+			app.pollCommodityQuotesAsync(false)
+		}
 
 		// The composition joins the subscription on entry and leaves it on exit,
 		// so an unwatched tab costs nothing.
 		app.recomputeStreamSymbols()
+		updateStatusBar(app)
 
 		if app.selectedIdx >= len(app.accounts) {
 			return
@@ -133,13 +144,11 @@ func setupInputHandlers(app *App) {
 	}
 
 	nextTab := func() {
-		next := (int(app.portfolioView.TabbedView.ActiveTab) + 1) % TabCount()
-		switchToTab(TabType(next))
+		switchToTab(app.portfolioView.TabbedView.adjacentTab(1))
 	}
 
 	prevTab := func() {
-		prev := (int(app.portfolioView.TabbedView.ActiveTab) - 1 + TabCount()) % TabCount()
-		switchToTab(TabType(prev))
+		switchToTab(app.portfolioView.TabbedView.adjacentTab(-1))
 	}
 
 	setupTableNavigation := func(table *tview.Table) {
@@ -156,11 +165,17 @@ func setupInputHandlers(app *App) {
 				if row < table.GetRowCount()-1 {
 					table.Select(row+1, 0)
 				}
+				if table == app.portfolioView.TabbedView.CommoditiesTable {
+					updateStatusBar(app)
+				}
 				return nil
 			case tcell.KeyUp, tcell.KeyCtrlP:
 				row, _ := table.GetSelection()
 				if row > 1 {
 					table.Select(row-1, 0)
+				}
+				if table == app.portfolioView.TabbedView.CommoditiesTable {
+					updateStatusBar(app)
 				}
 				return nil
 			}
@@ -172,6 +187,12 @@ func setupInputHandlers(app *App) {
 				}
 				if table == app.portfolioView.TabbedView.IndexTable {
 					if symbol := app.selectedIndexSymbol(); symbol != "" {
+						app.OpenProfileForSymbol(symbol)
+					}
+					return nil
+				}
+				if table == app.portfolioView.TabbedView.CommoditiesTable {
+					if symbol := app.selectedCommoditySymbol(); symbol != "" {
 						app.OpenProfileForSymbol(symbol)
 					}
 					return nil
@@ -204,6 +225,11 @@ func setupInputHandlers(app *App) {
 			case 'a', 'A', 'ф', 'Ф':
 				if table == app.portfolioView.TabbedView.PositionsTable {
 					app.OpenOrderModal()
+				}
+				if table == app.portfolioView.TabbedView.CommoditiesTable {
+					if symbol := app.selectedCommoditySymbol(); symbol != "" {
+						app.OpenOrderModalWithTicker(symbol)
+					}
 				}
 				if table == app.portfolioView.TabbedView.IndexTable {
 					// The composition carries full ticker@mic symbols, so the
@@ -250,6 +276,7 @@ func setupInputHandlers(app *App) {
 	setupTableNavigation(app.portfolioView.TabbedView.HistoryTable)
 	setupTableNavigation(app.portfolioView.TabbedView.OrdersTable)
 	setupTableNavigation(app.portfolioView.TabbedView.IndexTable)
+	setupTableNavigation(app.portfolioView.TabbedView.CommoditiesTable)
 	setupTableNavigation(app.portfolioView.TabbedView.Analytics.TradesTable)
 	setupTableNavigation(app.portfolioView.TabbedView.Analytics.PayoutTable)
 
@@ -334,9 +361,16 @@ func setupInputHandlers(app *App) {
 				app.switchProfileTimeframe(3)
 				return nil
 			case 'a', 'A', 'ф', 'Ф':
+				if app.profilePanel.readOnly && !app.commoditiesTabActive() {
+					return nil
+				}
 				app.OpenOrderModalWithTicker(app.profileSymbol)
 				return nil
 			case 'r', 'R', 'к', 'К':
+				if _, ok := app.commodityForSymbol(app.profileSymbol); ok {
+					app.loadProfileAsync("", app.profileSymbol, app.profileTimeframe)
+					return nil
+				}
 				if app.selectedIdx >= 0 && app.selectedIdx < len(app.accounts) {
 					app.profilePanel.Footer.SetText("[yellow]Refreshing...[-]")
 					app.loadProfileAsync(app.accounts[app.selectedIdx].ID, app.profileSymbol, app.profileTimeframe)
