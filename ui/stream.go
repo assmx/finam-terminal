@@ -93,19 +93,35 @@ func (a *App) flushQuoteInbox() {
 			indexTouched = true
 		}
 	}
+	commoditiesTouched := false
+	state := a.commodityFuturesLocked()
+	storeCommodityQuote := func(symbol string) {
+		if q, ok := inbox[symbol]; ok {
+			a.commodityQuotes[symbol] = q
+			commoditiesTouched = true
+		}
+	}
+	for _, c := range a.commodities {
+		storeCommodityQuote(c.Symbol)
+		if state != nil {
+			if future := state.bindings[c.Symbol]; future.Symbol != "" {
+				storeCommodityQuote(future.Symbol)
+				storeCommodityQuote(c.Conversion.FXSymbol)
+			}
+		}
+	}
 	a.dataMutex.Unlock()
 
 	if indexTouched && a.indexTabActive() {
 		updateIndexTable(a)
 	}
+	if commoditiesTouched && a.commoditiesTabActive() {
+		updateCommoditiesTable(a)
+	}
 
 	// Live quotes move the portfolio's value, so the breakdown follows them.
 	if a.onAnalyticsTab() {
 		updateAnalyticsOverview(a)
-	}
-
-	if accountID == "" {
-		return
 	}
 
 	if a.profileOpen {
@@ -115,6 +131,9 @@ func (a *App) flushQuoteInbox() {
 				a.profilePanel.Update(p)
 			}
 		}
+		return
+	}
+	if accountID == "" {
 		return
 	}
 
@@ -288,8 +307,23 @@ func (a *App) recomputeStreamSymbols() {
 	}
 	a.dataMutex.Unlock()
 
-	a.client.SetQuoteSymbols(computeStreamSymbols(
-		positions, a.profileOpen, a.profileSymbol, includeIndex, indexSymbols))
+	symbols := computeStreamSymbols(positions, a.profileOpen, a.profileSymbol, includeIndex, indexSymbols)
+	if a.commoditiesTabActive() {
+		a.dataMutex.RLock()
+		commoditySymbols := a.commodityQuoteSymbolsLocked()
+		a.dataMutex.RUnlock()
+		seen := make(map[string]bool, len(symbols))
+		for _, symbol := range symbols {
+			seen[symbol] = true
+		}
+		for _, symbol := range commoditySymbols {
+			if !seen[symbol] {
+				symbols = append(symbols, symbol)
+				seen[symbol] = true
+			}
+		}
+	}
+	a.client.SetQuoteSymbols(symbols)
 }
 
 // indexStreamGuardWindow is how long the subscription is given to come up after

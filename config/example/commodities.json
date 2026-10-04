@@ -1,0 +1,117 @@
+{
+  "enabled": true,
+  "commodities": {
+    "NG": {
+      "symbol": "NG@XNYM",
+      "name": "Природный газ",
+      "decimals": 3,
+      "moex_mask": "NG*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 1
+      },
+      "expiry_warning_days": 5
+    },
+    "BZ": {
+      "symbol": "BZ@IFEU",
+      "name": "Нефть Brent",
+      "decimals": 2,
+      "moex_mask": "BR*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 1
+      },
+      "expiry_warning_days": 5
+    },
+    "PA": {
+      "symbol": "PA@XNYM",
+      "name": "Палладий",
+      "decimals": 2,
+      "moex_mask": "PD*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 1
+      },
+      "expiry_warning_days": 5
+    },
+    "PL": {
+      "symbol": "PL@XNYM",
+      "name": "Платина",
+      "decimals": 2,
+      "moex_mask": "PT*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 1
+      },
+      "expiry_warning_days": 5
+    },
+    "GC": {
+      "symbol": "GC@XCEC",
+      "name": "Золото",
+      "decimals": 2,
+      "moex_mask": "GD*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 1
+      },
+      "expiry_warning_days": 5
+    },
+    "SI": {
+      "symbol": "SI@XCEC",
+      "name": "Серебро",
+      "decimals": 2,
+      "moex_mask": "SV*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 1
+      },
+      "expiry_warning_days": 5
+    },
+    "CC": {
+      "symbol": "CC@IFUS",
+      "name": "Какао",
+      "decimals": 2,
+      "moex_mask": "CC*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 1000,
+        "fx_symbol": "USD000UTSTOM@MISX",
+        "fx_operation": "divide"
+      },
+      "expiry_warning_days": 5
+    },
+    "KC": {
+      "symbol": "KC@IFUS",
+      "name": "Кофе",
+      "decimals": 2,
+      "moex_mask": "KC*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 100
+      },
+      "expiry_warning_days": 5
+    },
+    "ES": {
+      "symbol": "ES@XCME",
+      "name": "S&P 500",
+      "decimals": 2,
+      "moex_mask": "SF*@RTSX",
+      "roll_days": 2,
+      "conversion": {
+        "multiplier": 10
+      },
+      "expiry_warning_days": 5
+    }
+  },
+  "order": [
+    "ES",
+    "GC",
+    "SI",
+    "BZ",
+    "NG",
+    "PA",
+    "PL",
+    "CC",
+    "KC"
+  ]
+}

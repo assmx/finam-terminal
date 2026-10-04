@@ -134,6 +134,12 @@ func main() {
 
 	// Start TUI
 	app := ui.NewApp(client, accounts)
+	commodityCfg, commodityErr := config.LoadCommodities()
+	if commodityErr != nil {
+		log.Printf("[WARN] Commodities disabled: %v", commodityErr)
+		commodityCfg = config.CommoditiesConfig{Enabled: false}
+	}
+	app.ConfigureCommodities(commodityCfg)
 
 	// Light the header indicator from the cache. Without this the indicator
 	// would stay dark for up to a day after a version is found, because the
@@ -141,8 +147,8 @@ func main() {
 	// the check entirely while the cache is fresh.
 	app.SetUpdateAvailable(latestVersion)
 
-	// Watch for new releases in the background. Run returns immediately on a
-	// dev build, so nothing here touches the network unless this is a release.
+	// Watch for new releases in the background. Run returns immediately when
+	// updates are disabled or this is a development build.
 	updateCtx, stopUpdateCheck := context.WithCancel(context.Background())
 	defer stopUpdateCheck()
 	go updater.Run(updateCtx, version.Version, app.NotifyUpdateAvailable)
@@ -164,8 +170,8 @@ func main() {
 }
 
 // pendingUpdate returns the newer release named by the cached check result,
-// or an empty string when the running build is current, is a development
-// build, or no usable cache exists.
+// or an empty string when updates are disabled, the running build is current
+// or a development build, or no usable cache exists.
 //
 // It reads the file only — no network — so it costs nothing at startup. The
 // result feeds both the startup dialog and the header indicator: the
@@ -177,7 +183,7 @@ func pendingUpdate() string {
 	}
 
 	state, err := updater.LoadState()
-	if err != nil || !updater.IsNewer(version.Version, state.LatestVersion) {
+	if err != nil || !state.Enabled || !updater.IsNewer(version.Version, state.LatestVersion) {
 		return ""
 	}
 	return state.LatestVersion
@@ -190,7 +196,7 @@ func pendingUpdate() string {
 // return immediately. Every failure is reported to the user and then ignored:
 // a failed update must never keep the terminal from starting.
 func offerPendingUpdate(latest string) bool {
-	if latest == "" {
+	if latest == "" || !updater.UpdatesEnabled() {
 		return false
 	}
 	if !ui.NewUpdatePromptApp(version.String(), latest).Run() {
@@ -204,11 +210,20 @@ func offerPendingUpdate(latest string) bool {
 // it prints an explanation, pauses so the message can be read, and returns
 // false so the caller continues with a normal launch.
 func installUpdate() bool {
+	// Recheck after the dialog/TUI: the setting may have changed since the
+	// release was offered, and disabled updates must not fetch anything.
+	if !updater.UpdatesEnabled() {
+		return false
+	}
+
 	rel, err := updater.FetchLatestRelease(context.Background())
 	if err != nil {
 		fmt.Printf("\x1b[31m[ОШИБКА]\x1b[0m Не удалось получить сведения о релизе: %v\n", err)
 		fmt.Printf("         Обновите вручную: %s\n", updater.ManualUpdateCommand())
 		time.Sleep(2 * time.Second)
+		return false
+	}
+	if !updater.UpdatesEnabled() {
 		return false
 	}
 

@@ -53,10 +53,15 @@ func TestShouldCheck(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ShouldCheck(State{LastCheck: tt.last}, now); got != tt.want {
+			if got := ShouldCheck(State{Enabled: true, LastCheck: tt.last}, now); got != tt.want {
 				t.Errorf("ShouldCheck(last=%v) = %v, want %v", tt.last, got, tt.want)
 			}
 		})
+	}
+	for _, last := range []time.Time{{}, now.Add(-7 * 24 * time.Hour)} {
+		if ShouldCheck(State{Enabled: false, LastCheck: last}, now) {
+			t.Errorf("disabled state with LastCheck %v is due for a check", last)
+		}
 	}
 }
 
@@ -89,7 +94,7 @@ func TestRunFreshStateSkipsRequest(t *testing.T) {
 	withStateDir(t, t.TempDir())
 	calls := releaseServer(t)
 
-	if err := SaveState(State{LastCheck: time.Now(), LatestVersion: "v0.13.0"}); err != nil {
+	if err := SaveState(State{Enabled: true, LastCheck: time.Now(), LatestVersion: "v0.13.0"}); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
 
@@ -116,7 +121,7 @@ func TestRunStaleStateChecksAndSaves(t *testing.T) {
 
 	calls := releaseServer(t)
 
-	if err := SaveState(State{LastCheck: time.Now().Add(-48 * time.Hour)}); err != nil {
+	if err := SaveState(State{Enabled: true, LastCheck: time.Now().Add(-48 * time.Hour)}); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
 
@@ -227,7 +232,7 @@ func TestCheckOnceNetworkFailureKeepsState(t *testing.T) {
 	defer srv.Close()
 	withAPIBase(t, srv.URL)
 
-	seed := State{LastCheck: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), LatestVersion: "v0.13.0"}
+	seed := State{Enabled: true, LastCheck: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), LatestVersion: "v0.13.0"}
 	if err := SaveState(seed); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
@@ -256,7 +261,7 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 	withStateDir(t, t.TempDir())
 	releaseServer(t)
 
-	if err := SaveState(State{LastCheck: time.Now()}); err != nil {
+	if err := SaveState(State{Enabled: true, LastCheck: time.Now()}); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
 
@@ -272,5 +277,149 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after the context was cancelled")
+	}
+}
+
+func TestDisabledUpdatesSkipRequestsAndKeepCache(t *testing.T) {
+	for _, direct := range []bool{false, true} {
+		name := "Run"
+		if direct {
+			name = "checkOnce"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			withStateDir(t, dir)
+			calls := releaseServer(t)
+			seed := State{
+				Enabled:       false,
+				LastCheck:     time.Now().Add(-48 * time.Hour),
+				LatestVersion: "v0.14.0",
+			}
+			if err := SaveState(seed); err != nil {
+				t.Fatalf("seed state: %v", err)
+			}
+			before, err := os.ReadFile(filepath.Join(dir, stateFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			if direct {
+				c := &checker{current: "v0.13.0", onNewVersion: func(string) { called = true }}
+				if err := c.checkOnce(context.Background()); err != nil {
+					t.Fatalf("checkOnce() error = %v", err)
+				}
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				Run(ctx, "v0.13.0", func(string) { called = true })
+				if ctx.Err() != nil {
+					t.Fatal("disabled Run did not return immediately")
+				}
+			}
+			if got := calls(); got != 0 || called {
+				t.Errorf("disabled updates made %d requests and callback=%v, want no requests or notification", got, called)
+			}
+			after, err := os.ReadFile(filepath.Join(dir, stateFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Error("disabled updates rewrote the cache")
+			}
+		})
+	}
+}
+
+func TestCheckOnceDisabledDuringRequestKeepsSetting(t *testing.T) {
+	dir := t.TempDir()
+	withStateDir(t, dir)
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(finish) }) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-finish
+		_, _ = w.Write([]byte(latestReleaseJSON))
+	}))
+	defer srv.Close()
+	defer release()
+	withAPIBase(t, srv.URL)
+
+	notified := make(chan string, 1)
+	c := &checker{current: "v0.13.0", onNewVersion: func(latest string) { notified <- latest }}
+	done := make(chan error, 1)
+	go func() { done <- c.checkOnce(context.Background()) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("release request did not start")
+	}
+	if err := SaveState(State{Enabled: false, LatestVersion: "v0.12.0"}); err != nil {
+		t.Fatalf("disable updates: %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("checkOnce() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("checkOnce did not finish")
+	}
+	select {
+	case got := <-notified:
+		t.Errorf("disabled updates notified about %q", got)
+	default:
+	}
+	after, err := os.ReadFile(filepath.Join(dir, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Error("completed check overwrote the user's disabled setting or cache")
+	}
+}
+
+func TestRunChecksWithDefaultAndLegacySettings(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		json string
+	}{
+		{name: "missing file"},
+		{name: "legacy cache", json: `{"latest_version":"v0.12.0"}`},
+		{name: "explicit enabled", json: `{"enabled":true,"latest_version":"v0.12.0"}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			withStateDir(t, dir)
+			if tt.json != "" {
+				if err := os.WriteFile(filepath.Join(dir, stateFileName), []byte(tt.json), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := releaseServer(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			latest := ""
+			Run(ctx, "v0.13.0", func(tag string) {
+				latest = tag
+				cancel()
+			})
+			if got := calls(); got != 1 || latest != "v0.14.0" {
+				t.Errorf("Run made %d requests, notified %q; want one request and v0.14.0", got, latest)
+			}
+			state, err := LoadState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !state.Enabled || state.LatestVersion != "v0.14.0" || state.LastCheck.IsZero() {
+				t.Errorf("successful check saved %+v, want enabled updates with the new release", state)
+			}
+		})
 	}
 }

@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,6 +17,9 @@ const testReleaseTag = "v0.13.0"
 // release build.
 func asReleaseBuild(t *testing.T) {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	prev := version.Version
 	version.Version = testReleaseTag
 	t.Cleanup(func() { version.Version = prev })
@@ -107,5 +112,29 @@ func TestSetUpdateAvailableIgnoresOlderVersion(t *testing.T) {
 	}
 	if got := app.LatestVersion(); got != "" {
 		t.Errorf("LatestVersion() = %q, want it left empty", got)
+	}
+}
+
+func disableTestUpdates(t *testing.T) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("HOME"), ".finam-cli")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "update.json"), []byte(`{"enabled":false,"latest_version":"v0.14.0"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDisabledUpdatesHideHeaderNotification(t *testing.T) {
+	asReleaseBuild(t)
+	disableTestUpdates(t)
+	app := NewApp(&mockClient{}, nil)
+	app.SetUpdateAvailable("v0.14.0")
+	if got := app.LatestVersion(); got != "" {
+		t.Errorf("disabled LatestVersion() = %q, want empty", got)
+	}
+	if got := app.header.GetText(true); strings.Contains(got, "⚡") {
+		t.Errorf("disabled updates show a header notification: %q", got)
 	}
 }

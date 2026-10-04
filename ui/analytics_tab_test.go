@@ -31,17 +31,6 @@ func TestTabbedView_AnalyticsIsTheFifthTab(t *testing.T) {
 	}
 }
 
-// TestTabCount_IncludesAnalytics guards the single source of truth the ←/→
-// cycle wraps on.
-func TestTabCount_IncludesAnalytics(t *testing.T) {
-	if got := TabCount(); got != 5 {
-		t.Errorf("TabCount() = %d, want 5", got)
-	}
-	if int(TabAnalytics) != 4 {
-		t.Errorf("TabAnalytics = %d, want 4 (last in the cycle)", TabAnalytics)
-	}
-}
-
 // TestTabbedView_HeaderShowsAnalyticsTab verifies the header renders all five
 // tabs and highlights Analytics when it is active.
 func TestTabbedView_HeaderShowsAnalyticsTab(t *testing.T) {
@@ -148,7 +137,7 @@ func TestAnalyticsView_StatusLines(t *testing.T) {
 }
 
 // TestInputHandler_TabCycleIncludesAnalytics verifies the forward cycle visits
-// all five tabs and wraps back to Positions, with focus following the tab.
+// every tab and wraps back to Positions, with focus following the tab.
 func TestInputHandler_TabCycleIncludesAnalytics(t *testing.T) {
 	app := NewApp(&mockClient{}, nil)
 	setupInputHandlers(app)
@@ -160,10 +149,11 @@ func TestInputHandler_TabCycleIncludesAnalytics(t *testing.T) {
 		tab   TabType
 		focus tview.Primitive
 	}{
-		{TabHistory, tv.HistoryTable},
 		{TabOrders, tv.OrdersTable},
+		{TabCommodities, tv.CommoditiesTable},
 		{TabIndex, tv.IndexTable},
 		{TabAnalytics, tv.Analytics.Focusable()},
+		{TabHistory, tv.HistoryTable},
 		{TabPositions, tv.PositionsTable},
 	}
 
@@ -178,9 +168,9 @@ func TestInputHandler_TabCycleIncludesAnalytics(t *testing.T) {
 	}
 }
 
-// TestInputHandler_PrevTabReachesAnalyticsFromPositions verifies the backward
-// cycle now wraps to Analytics rather than to Index.
-func TestInputHandler_PrevTabReachesAnalyticsFromPositions(t *testing.T) {
+// TestInputHandler_PrevTabReachesHistoryFromPositions verifies backward
+// navigation reaches History, then Analytics.
+func TestInputHandler_PrevTabReachesHistoryFromPositions(t *testing.T) {
 	app := NewApp(&mockClient{}, nil)
 	setupInputHandlers(app)
 	app.app.SetFocus(app.portfolioView.TabbedView.PositionsTable)
@@ -188,8 +178,12 @@ func TestInputHandler_PrevTabReachesAnalyticsFromPositions(t *testing.T) {
 
 	capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
 
+	if got := app.portfolioView.TabbedView.ActiveTab; got != TabHistory {
+		t.Errorf("ActiveTab = %v, want TabHistory after wrapping backwards", got)
+	}
+	capture(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone))
 	if got := app.portfolioView.TabbedView.ActiveTab; got != TabAnalytics {
-		t.Errorf("ActiveTab = %v, want TabAnalytics after wrapping backwards", got)
+		t.Errorf("ActiveTab = %v, want TabAnalytics before History", got)
 	}
 }
 
